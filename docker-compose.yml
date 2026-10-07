@@ -1,0 +1,26 @@
+services:
+  collector:
+    build: .
+    container_name: opencti-glpi-collector
+    restart: always
+    environment:
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PASS=${REDIS_PASS}
+      - REDIS_DB=2
+      - POLL_INTERVAL=60
+      - BATCH_SIZE=200
+      - OPENCTI_URL=${OPENCTI_URL}
+      - OPENCTI_TOKEN=${OPENCTI_TOKEN}
+      - GLPI_URL=${GLPI_URL}
+      - GLPI_APP_TOKEN=${GLPI_APP_TOKEN}
+      - GLPI_USER_TOKEN=${GLPI_USER_TOKEN}
+    # Jika OpenCTI/GLPI ada di network Docker lain, aktifkan:
+    # networks:
+    #   - opencti_default
+    #   - glpi_default
+
+# networks:
+#   opencti_default:
+#     external: true
+#   glpi_default:
+#     external: true
