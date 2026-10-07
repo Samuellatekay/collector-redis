@@ -14,6 +14,14 @@ services:
       - GLPI_URL=${GLPI_URL}
       - GLPI_APP_TOKEN=${GLPI_APP_TOKEN}
       - GLPI_USER_TOKEN=${GLPI_USER_TOKEN}
+      # --- Enrichment ---
+      - ABUSEIPDB_KEY=${ABUSEIPDB_KEY:-}
+      - VT_API_KEY=${VT_API_KEY:-}
+      - IPINFO_TOKEN=${IPINFO_TOKEN:-}
+      - ENRICH_MAX_PER_CYCLE=20
+      - ENRICH_DELAY_SECONDS=120
+      - ENRICH_CACHE_TTL=86400
+      - ENRICH_ASSET=true
     # Jika OpenCTI/GLPI ada di network Docker lain, aktifkan:
     # networks:
     #   - opencti_default

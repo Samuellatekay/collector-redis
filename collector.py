@@ -15,6 +15,8 @@ import redis
 import requests
 from pycti import OpenCTIApiClient
 
+import enrichment
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("collector")
 
@@ -102,6 +104,9 @@ def glpi_kill(token):
         requests.get(f"{GLPI_URL}/killSession", headers=glpi_headers(token), timeout=10)
     except requests.RequestException:
         pass
+
+
+GLPI = {"url": GLPI_URL, "session": glpi_session, "headers": glpi_headers, "kill": glpi_kill}
 
 
 # ------------------------------------------------------------------ GLPI (keluar)
@@ -229,6 +234,7 @@ if __name__ == "__main__":
         for name, fn in (
             ("opencti", lambda: collect_opencti(client)),
             ("glpi", collect_glpi),
+            ("enrichment", lambda: enrichment.collect_enrichment(client, r, push, GLPI)),
         ):
             try:
                 fn()
