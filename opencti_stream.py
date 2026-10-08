@@ -49,11 +49,11 @@ def run(r, push, mark):
             "Authorization": f"Bearer {os.environ['OPENCTI_TOKEN']}",
             "Accept": "text/event-stream",
         }
-        last_id = r.hget(STATE_KEY, "stream_last_id")
-        if last_id:
-            headers["Last-Event-ID"] = last_id          # lanjut dari event terakhir
-
+        last_id = None
         try:
+            last_id = r.hget(STATE_KEY, "stream_last_id")
+            if last_id:
+                headers["Last-Event-ID"] = last_id      # lanjut dari event terakhir
             log.info("Menyambung ke live stream %s (dari id=%s)", url, last_id or "baru")
             with requests.get(url, headers=headers, stream=True, timeout=(10, 300)) as resp:
                 resp.raise_for_status()

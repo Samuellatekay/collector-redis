@@ -8,11 +8,11 @@ services:
       - REDIS_PASS=${REDIS_PASS}
       - REDIS_DB=2
       - POLL_INTERVAL=60                                # enrichment (dan polling OpenCTI jika stream tidak dipakai)
-      - GLPI_POLL_INTERVAL=${GLPI_POLL_INTERVAL:-5}     # BARU: polling tiket GLPI
+      - GLPI_POLL_INTERVAL=${GLPI_POLL_INTERVAL:-5}     # polling tiket GLPI
       - BATCH_SIZE=200
       - OPENCTI_URL=${OPENCTI_URL}
       - OPENCTI_TOKEN=${OPENCTI_TOKEN}
-      - OPENCTI_STREAM_ID=${OPENCTI_STREAM_ID:-}        # BARU: kosong = pakai polling
+      - OPENCTI_STREAM_ID=${OPENCTI_STREAM_ID:-}        # kosong = pakai polling
       - GLPI_URL=${GLPI_URL}
       - GLPI_APP_TOKEN=${GLPI_APP_TOKEN}
       - GLPI_USER_TOKEN=${GLPI_USER_TOKEN}
@@ -24,13 +24,9 @@ services:
       - ENRICH_DELAY_SECONDS=120
       - ENRICH_CACHE_TTL=86400
       - ENRICH_ASSET=true
-    # Jika OpenCTI/GLPI ada di network Docker lain, aktifkan:
-    # networks:
-    #   - opencti_default
-    #   - glpi_default
 
-# networks:
-#   opencti_default:
-#     external: true
-#   glpi_default:
-#     external: true
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24

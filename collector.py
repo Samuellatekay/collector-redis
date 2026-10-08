@@ -62,7 +62,7 @@ def make_redis(**extra):
 
 
 r = make_redis()                                              # push + state
-rc = make_redis(socket_timeout=15, retry_on_timeout=True)     # khusus consumer (BLPOP)
+rc = make_redis(socket_timeout=15)                            # khusus consumer (BLPOP)
 
 
 def push(key, source, doc):
