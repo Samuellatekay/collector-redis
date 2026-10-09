@@ -37,7 +37,7 @@ REDIS_PASS = os.environ["REDIS_PASS"]
 REDIS_DB = int(os.getenv("REDIS_DB", "2"))
 
 INTERVAL = int(os.getenv("POLL_INTERVAL", "60"))              # enrichment + fallback polling OpenCTI
-GLPI_INTERVAL = int(os.getenv("GLPI_POLL_INTERVAL", "5"))     # polling tiket GLPI
+GLPI_INTERVAL = float(os.getenv("GLPI_POLL_INTERVAL", "5"))   # polling tiket GLPI (boleh desimal, mis. 0.5)
 BATCH = int(os.getenv("BATCH_SIZE", "200"))
 
 OPENCTI_URL = os.environ["OPENCTI_URL"]
