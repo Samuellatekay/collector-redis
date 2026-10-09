@@ -38,6 +38,7 @@ REDIS_DB = int(os.getenv("REDIS_DB", "2"))
 
 INTERVAL = int(os.getenv("POLL_INTERVAL", "60"))              # enrichment + fallback polling OpenCTI
 GLPI_INTERVAL = float(os.getenv("GLPI_POLL_INTERVAL", "5"))   # polling tiket GLPI (boleh desimal, mis. 0.5)
+BLPOP_TIMEOUT = float(os.getenv("BLPOP_TIMEOUT", "1"))        # lama consumer menunggu antrean outbound (detik)
 BATCH = int(os.getenv("BATCH_SIZE", "200"))
 
 OPENCTI_URL = os.environ["OPENCTI_URL"]
@@ -254,7 +255,7 @@ def consume_outbound(client):
     }
     while True:
         try:
-            item = rc.blpop(list(handlers.keys()), timeout=5)
+            item = rc.blpop(list(handlers.keys()), timeout=BLPOP_TIMEOUT)
             if not item:
                 continue
             key, raw = item
