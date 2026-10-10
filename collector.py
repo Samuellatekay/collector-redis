@@ -39,6 +39,7 @@ REDIS_DB = int(os.getenv("REDIS_DB", "2"))
 INTERVAL = int(os.getenv("POLL_INTERVAL", "60"))              # enrichment + fallback polling OpenCTI
 GLPI_INTERVAL = float(os.getenv("GLPI_POLL_INTERVAL", "5"))   # polling tiket GLPI (boleh desimal, mis. 0.5)
 BLPOP_TIMEOUT = float(os.getenv("BLPOP_TIMEOUT", "1"))        # lama consumer menunggu antrean outbound (detik)
+ENRICH_INTERVAL = float(os.getenv("ENRICH_INTERVAL", str(INTERVAL)))  # jeda siklus enrichment (detik, boleh desimal)
 BATCH = int(os.getenv("BATCH_SIZE", "200"))
 
 OPENCTI_URL = os.environ["OPENCTI_URL"]
@@ -197,6 +198,22 @@ def collect_glpi():
 
 # ------------------------------------------------------------------ OpenCTI (masuk)
 
+_OBS_TYPES = {
+    "ipv4-addr": "IPv4-Addr",
+    "ipv6-addr": "IPv6-Addr",
+    "domain-name": "Domain-Name",
+    "url": "Url",
+    "file": "StixFile",
+}
+
+
+def _observable_type(pattern):
+    """Tentukan main observable type dari pola STIX (objek pertama yang muncul)."""
+    import re
+    m = re.search(r"\[(ipv4-addr|ipv6-addr|domain-name|url|file):", pattern or "")
+    return _OBS_TYPES[m.group(1)] if m else "IPv4-Addr"
+
+
 def send_opencti(client, msg):
     action = msg.get("action")
     if action == "create_indicator":
@@ -204,7 +221,7 @@ def send_opencti(client, msg):
             name=msg["name"],
             pattern=msg["pattern"],
             pattern_type=msg.get("pattern_type", "stix"),
-            x_opencti_main_observable_type=msg.get("observable_type", "IPv4-Addr"),
+            x_opencti_main_observable_type=msg.get("observable_type") or _observable_type(msg["pattern"]),
             x_opencti_score=int(msg.get("score", 50)),
             description=f"{MARK} {msg.get('description', 'Dikirim via collector')}",
         )
@@ -303,8 +320,8 @@ if __name__ == "__main__":
 
     start_loop("glpi", collect_glpi, GLPI_INTERVAL)
     start_loop("enrichment",
-               lambda: enrichment.collect_enrichment(client, r, push, GLPI), INTERVAL)
+               lambda: enrichment.collect_enrichment(client, r, push, GLPI), ENRICH_INTERVAL)
 
-    log.info("Collector berjalan. GLPI tiap %ss, enrichment tiap %ss", GLPI_INTERVAL, INTERVAL)
+    log.info("Collector berjalan. GLPI tiap %ss, enrichment tiap %ss", GLPI_INTERVAL, ENRICH_INTERVAL)
     while True:
         time.sleep(3600)
