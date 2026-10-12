@@ -263,30 +263,104 @@ def send_glpi(msg):
         glpi_kill(token)
 
 
-# ------------------------------------------------------------------ Consumer antrian outbound
+
+# ------------------------------------------------------------------
+# Consumer antrian outbound
+# ------------------------------------------------------------------
 
 def consume_outbound(client):
     handlers = {
         "outbound-opencti": lambda m: send_opencti(client, m),
         "outbound-glpi": send_glpi,
     }
+
     while True:
         try:
-            item = rc.blpop(list(handlers.keys()), timeout=BLPOP_TIMEOUT)
+            item = rc.blpop(
+                list(handlers.keys()),
+                timeout=BLPOP_TIMEOUT
+            )
+
             if not item:
                 continue
+
             key, raw = item
+
             try:
-                handlers[key](json.loads(raw))
-                log.info("Terkirim dari antrian %s", key)
+                # Parse pesan dari Redis
+                msg = json.loads(raw)
+
+                # Proses pengiriman ke OpenCTI atau GLPI
+                result = handlers[key](msg)
+
+                # Siapkan data untuk diteruskan ke Logstash
+                if key == "outbound-opencti":
+                    event = {
+                        "type": "indicator",
+                        "source": "outbound-opencti",
+                        "request": msg,
+                        "response": result,
+                    }
+
+                    push(
+                        "opencti-events",
+                        "opencti",
+                        event
+                    )
+
+                elif key == "outbound-glpi":
+                    event = {
+                        "type": "ticket",
+                        "source": "outbound-glpi",
+                        "request": msg,
+                        "response": result,
+                    }
+
+                    push(
+                        "glpi-logs",
+                        "glpi",
+                        event
+                    )
+
+                log.info(
+                    "Pesan berhasil diproses dari antrian %s",
+                    key
+                )
+
             except Exception as e:
-                log.error("Gagal memproses %s: %s", key, e)
-                rc.rpush(f"{key}:failed", raw)
+                log.exception(
+                    "Gagal memproses pesan dari %s: %s",
+                    key,
+                    e
+                )
+
+                # Masukkan pesan gagal ke antrian failed
+                try:
+                    rc.rpush(f"{key}:failed", raw)
+                except redis.RedisError as redis_error:
+                    log.error(
+                        "Gagal menyimpan pesan ke antrian failed: %s",
+                        redis_error
+                    )
+
         except redis.TimeoutError:
-            continue                      # antrean kosong / koneksi diam, bukan error sungguhan
+            # Antrian kosong atau koneksi mengalami timeout
+            continue
+
         except redis.RedisError as e:
-            log.error("Redis error (consumer): %s", e)
+            log.error(
+                "Redis error pada consumer outbound: %s",
+                e
+            )
             time.sleep(5)
+
+        except Exception as e:
+            log.exception(
+                "Kesalahan tidak terduga pada consumer outbound: %s",
+                e
+            )
+            time.sleep(2)
+
 
 
 # ------------------------------------------------------------------ Main
