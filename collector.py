@@ -214,33 +214,17 @@ def _observable_type(pattern):
     return _OBS_TYPES[m.group(1)] if m else "IPv4-Addr"
 
 
-def _create_observables(pattern):
-    """Buat observable bersamaan dengan indikator, kecuali untuk IP non-publik
-    (private/loopback/link-local): tidak ada gunanya diperiksa AbuseIPDB dan hanya memakai kuota."""
-    import ipaddress
-    import re
-    for ip in re.findall(r"ipv[46]-addr:value\s*=\s*'([^']+)'", pattern or ""):
-        try:
-            if not ipaddress.ip_address(ip).is_global:
-                return False
-        except ValueError:
-            return False
-    return True
-
-
 def send_opencti(client, msg):
     action = msg.get("action")
     if action == "create_indicator":
-        ind = client.indicator.create(
+        client.indicator.create(
             name=msg["name"],
             pattern=msg["pattern"],
             pattern_type=msg.get("pattern_type", "stix"),
             x_opencti_main_observable_type=msg.get("observable_type") or _observable_type(msg["pattern"]),
-            x_opencti_create_observables=_create_observables(msg["pattern"]),
             x_opencti_score=int(msg.get("score", 50)),
             description=f"{MARK} {msg.get('description', 'Dikirim via collector')}",
         )
-        return {"id": ind.get("id") if isinstance(ind, dict) else None}
     else:
         raise ValueError(f"action OpenCTI tidak dikenal: {action}")
 
@@ -250,7 +234,6 @@ def send_opencti(client, msg):
 def send_glpi(msg):
     action = msg.get("action")
     token = glpi_session()
-    result = None
     try:
         h = glpi_headers(token)
         if action == "create_ticket":
@@ -262,12 +245,10 @@ def send_glpi(msg):
             }}
             res = requests.post(f"{GLPI_URL}/Ticket", headers=h, json=body, timeout=30)
             res.raise_for_status()
-            result = res.json()
         elif action == "update_ticket":
             body = {"input": {k: v for k, v in msg.items() if k not in ("action", "id")}}
             res = requests.put(f"{GLPI_URL}/Ticket/{msg['id']}", headers=h, json=body, timeout=30)
             res.raise_for_status()
-            result = res.json()
         elif action == "add_followup":
             body = {"input": {
                 "itemtype": "Ticket",
@@ -276,12 +257,11 @@ def send_glpi(msg):
             }}
             res = requests.post(f"{GLPI_URL}/ITILFollowup", headers=h, json=body, timeout=30)
             res.raise_for_status()
-            result = res.json()
         else:
             raise ValueError(f"action GLPI tidak dikenal: {action}")
     finally:
         glpi_kill(token)
-    return result
+
 
 
 # ------------------------------------------------------------------
