@@ -25,6 +25,16 @@ services:
       - ENRICH_CACHE_TTL=86400
       - ENRICH_ASSET=true
 
+  flow-viewer:
+    build: .
+    profiles: ["tools"]
+    command: ["python", "-u", "lihat-alur.py", "--full"]
+    environment:
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PASS=${REDIS_PASS}
+      - REDIS_DB=${REDIS_DB:-2}
+
 networks:
   default:
     ipam:

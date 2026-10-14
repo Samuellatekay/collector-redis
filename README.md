@@ -20,10 +20,22 @@ Buat App-Token (API clients) dan ambil User-Token (Remote access keys).
     docker compose up -d --build
     docker logs -f opencti-glpi-collector
 
-## 4. Logstash (VM-2)
+## 4. Pantau alur data OpenCTI/GLPI
+Jalankan dari folder yang berisi `docker-compose.yml` dan `.env`:
+
+    docker compose --profile tools run --build --rm flow-viewer
+
+Viewer akan menampilkan payload lengkap yang baru melewati Redis, termasuk perintah
+menuju OpenCTI/GLPI (`outbound-opencti`, `outbound-glpi`) serta data yang dibaca
+dari OpenCTI/GLPI (`opencti-events`, `glpi-logs`). Viewer hanya menggunakan Redis
+`REDIS_HOST`, `REDIS_PORT` (default 6379), `REDIS_PASS`, dan `REDIS_DB` (default 2)
+dari `.env`; ia tidak menghapus pesan dari antrean. Hentikan dengan `Ctrl+C`.
+Redis harus mengizinkan koneksi dari container Compose dan perintah `MONITOR`.
+
+## 5. Logstash (VM-2)
 Salin logstash/collector.conf ke /etc/logstash/conf.d/ lalu restart Logstash.
 
-## 5. Tes arah masuk
+## 6. Tes arah masuk
     redis-cli -h 192.168.1.10 -a PASS -n 2 rpush outbound-glpi \
       '{"action":"create_ticket","title":"Tes","content":"Halo GLPI","urgency":3}'
 
@@ -32,7 +44,7 @@ Salin logstash/collector.conf ke /etc/logstash/conf.d/ lalu restart Logstash.
 
 Pesan gagal ada di list outbound-glpi:failed / outbound-opencti:failed.
 
-## 6. Enrichment (Reputation, Geolocation, Asset Info, Domain Age)
+## 7. Enrichment (Reputation, Geolocation, Asset Info, Domain Age)
 Collector memperkaya observable baru OpenCTI (IP & domain) dan mengirim ke list `enrichment-events`.
 
 | Data | Sumber |

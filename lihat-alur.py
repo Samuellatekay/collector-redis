@@ -9,7 +9,7 @@ MONITOR membebani Redis, jadi pakai untuk debugging saja dan hentikan dengan Ctr
 Catatan: hanya data BARU (ditulis setelah skrip berjalan) yang tampil.
 
 Pemakaian:
-    export REDIS_HOST=192.168.51.39          # default sama
+    # Jalankan dari folder collector; pengaturan dibaca dari .env
     read -rsp "Password Redis: " REDIS_PASS; echo; export REDIS_PASS
     python3 lihat-alur.py            # ringkas
     python3 lihat-alur.py --full     # JSON lengkap
@@ -23,7 +23,27 @@ import socket
 import sys
 from datetime import datetime
 
-HOST = os.getenv("REDIS_HOST", "192.168.51.39")
+
+def load_env_file():
+    """Load Redis settings from .env without overriding exported environment variables."""
+    try:
+        with open(".env", encoding="utf-8") as env_file:
+            for line in env_file:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key, value = key.strip(), value.strip()
+                if value[:1] in ("'", '"') and value[-1:] == value[:1]:
+                    value = value[1:-1]
+                os.environ.setdefault(key, value)
+    except FileNotFoundError:
+        pass
+
+
+load_env_file()
+
+HOST = os.getenv("REDIS_HOST", "127.0.0.1")
 PORT = int(os.getenv("REDIS_PORT", "6379"))
 DB = int(os.getenv("REDIS_DB", "2"))
 FULL = "--full" in sys.argv
@@ -34,7 +54,14 @@ LINE_RE = re.compile(r"^\+?(?P<ts>\d+\.\d+) \[(?P<db>\d+) (?P<client>[^\]]+)\] (
 CMD_RE = re.compile(r'^"(?P<cmd>\w+)" "(?P<key>[^"]+)" "(?P<val>.*)"$', re.S)
 SIMPLE_ESC = {"n": b"\n", "r": b"\r", "t": b"\t", "a": b"\a", "b": b"\b"}
 
-WATCHED = {"opencti-events", "glpi-logs", "enrichment-events", "outbound-opencti", "outbound-glpi"}
+WATCHED = {
+    "logstash_alerts",
+    "opencti-events",
+    "glpi-logs",
+    "enrichment-events",
+    "outbound-opencti",
+    "outbound-glpi",
+}
 
 
 def unrepr(s):
@@ -63,6 +90,8 @@ def unrepr(s):
 def classify(key, doc):
     """Beri label arah dan sistem."""
     src = (doc.get("source") or "") if isinstance(doc, dict) else ""
+    if key == "logstash_alerts":
+        return "MASUK dari Logstash/Wazuh (alert menunggu diproses)"
     if key == "outbound-glpi":
         return "MASUK ke GLPI    (perintah dari Logstash, akan dibuat jadi tiket)"
     if key == "outbound-opencti":
@@ -80,8 +109,17 @@ def classify(key, doc):
     return key
 
 
-SHOW = ["id", "event", "type", "name", "title", "pattern", "score", "status", "urgency",
-        "action", "date_mod", "created_at", "observable", "request", "response"]
+SHOW = [
+    "id", "event", "type", "source", "source_system", "entity_type", "value",
+    "name", "title", "pattern", "pattern_type", "score", "relations", "status",
+    "urgency", "action", "date_mod", "valid_from", "created_at", "request",
+    "response",
+]
+
+REQUEST_FIELDS = (
+    "action", "name", "pattern", "pattern_type", "score", "description",
+    "observable_type", "title", "content", "urgency", "ticket_type", "id",
+)
 
 
 def summary(doc):
@@ -91,8 +129,7 @@ def summary(doc):
     # request dipersingkat: isi tiket (content) bisa panjang dan memuat log mentah
     req = keep.get("request")
     if isinstance(req, dict):
-        keep["request"] = {k: v for k, v in req.items()
-                           if k in ("action", "title", "name", "pattern", "urgency", "score")}
+        keep["request"] = {k: req[k] for k in REQUEST_FIELDS if k in req}
     return json.dumps(keep, ensure_ascii=False)
 
 
@@ -157,7 +194,13 @@ def handle(line):
 
 def main():
     password = os.getenv("REDIS_PASS") or getpass.getpass("Password Redis: ")
-    print(f"Terhubung ke {HOST}:{PORT}, memantau db {DB}. Menunggu data BARU... (Ctrl+C untuk berhenti)\n", flush=True)
+    print(
+        f"Terhubung ke Redis {HOST}:{PORT}, DB {DB}. "
+        "Menampilkan data BARU tanpa menghapus antrean. Ctrl+C untuk berhenti.\n"
+        "Arah: outbound-opencti/outbound-glpi = perintah menuju sistem; "
+        "opencti-events/glpi-logs = data hasil baca atau hasil kirim.\n",
+        flush=True,
+    )
     for line in monitor_lines(HOST, PORT, password):
         out = handle(line)
         if out:
