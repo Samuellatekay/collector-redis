@@ -99,10 +99,14 @@ def classify(key, doc):
     if key == "glpi-logs":
         if src == "outbound-glpi":
             return "MASUK ke GLPI    (catatan hasil: tiket sudah dibuat)"
+        if src == "collector-alert":
+            return "KELUAR dari GLPI (tiket terkait alert collector)"
         return "KELUAR dari GLPI (tiket terbaca collector)"
     if key == "opencti-events":
         if src == "outbound-opencti":
             return "MASUK ke OpenCTI (catatan hasil: indikator sudah dibuat)"
+        if src == "collector-alert":
+            return "KELUAR dari OpenCTI (indikator terkait alert collector)"
         return "KELUAR dari OpenCTI (indikator terbaca collector)"
     if key == "enrichment-events":
         return "KELUAR enrichment (hasil pengayaan IP/domain)"

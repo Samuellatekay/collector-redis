@@ -124,10 +124,11 @@ def collect_opencti(client):
     )
     sent = 0
     for i in items:
-        if (i.get("description") or "").startswith(MARK):
-            continue  # dibuat oleh collector sendiri
+        if not (i.get("description") or "").startswith(MARK):
+            continue
         push("opencti-events", "opencti", {
             "id": i["id"],
+            "source": "collector-alert",
             "type": "indicator",
             "name": i.get("name"),
             "pattern": i.get("pattern"),
@@ -195,9 +196,13 @@ def _glpi_get(path, params):
 def collect_glpi():
     last = r.hget(STATE_KEY, "glpi_last") or "1970-01-01 00:00:00"
     params = {
-        "criteria[0][field]": 19,            # 19 = date_mod
-        "criteria[0][searchtype]": "morethan",
-        "criteria[0][value]": last,
+        "criteria[0][field]": 1,             # title
+        "criteria[0][searchtype]": "contains",
+        "criteria[0][value]": MARK,
+        "criteria[1][link]": "AND",
+        "criteria[1][field]": 19,            # date_mod
+        "criteria[1][searchtype]": "morethan",
+        "criteria[1][value]": last,
         "sort": 19,
         "order": "ASC",
         "range": f"0-{BATCH - 1}",
@@ -216,10 +221,11 @@ def collect_glpi():
     sent = 0
     for t in data:
         title = t.get("1") or ""
-        if title.startswith(MARK):
+        if not title.startswith(MARK):
             continue
         push("glpi-logs", "glpi", {
             "id": t.get("2"),
+            "source": "collector-alert",
             "type": "ticket",
             "title": title,
             "status": t.get("12"),

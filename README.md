@@ -58,6 +58,12 @@ Event indikator OpenCTI di `opencti-events` menyertakan `score` dan `relations`.
 Relasi memuat relasi masuk maupun keluar, dengan tipe relasi dan ringkasan entitas
 `from`/`to`.
 
+Polling OpenCTI/GLPI dan live stream indikator hanya meneruskan indikator atau tiket
+yang deskripsi/judulnya diawali penanda `[from-collector]`, yaitu data yang dibuat
+melalui collector dari antrean masuk. Data lain dari OpenCTI/GLPI tidak diteruskan
+oleh jalur tersebut. Proses enrichment (`enrichment-events`) tetap memindai observable
+baru sesuai konfigurasi enrichment dan tidak dibatasi oleh penanda ini.
+
 Template Elasticsearch agar peta/tanggal terbaca benar (jalankan sekali di Kibana Dev Tools):
 
     PUT _index_template/enrichment

@@ -75,9 +75,10 @@ def run(r, push, mark, get_relations):
                     elif line.startswith("data:") and etype in ("create", "update", "delete"):
                         stix = json.loads(line[5:]).get("data", {})
                         if stix.get("type") == "indicator":
-                            if not (stix.get("description") or "").startswith(mark):
+                            if (stix.get("description") or "").startswith(mark):
                                 push("opencti-events", "opencti", {
                                     "id": _internal_id(stix),
+                                    "source": "collector-alert",
                                     "event": etype,
                                     "type": "indicator",
                                     "name": stix.get("name"),
