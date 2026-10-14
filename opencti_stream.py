@@ -4,7 +4,11 @@ Menggantikan collect_opencti() yang polling tiap 60 detik.
 
 Cara pakai di collector.py:
     import opencti_stream
-    threading.Thread(target=opencti_stream.run, args=(r, push, MARK), daemon=True).start()
+    threading.Thread(
+        target=opencti_stream.run,
+        args=(r, push, MARK, get_relations),
+        daemon=True,
+    ).start()
 Lalu hapus ("opencti", ...) dari daftar fungsi di loop utama.
 
 Variabel .env tambahan:
@@ -40,7 +44,7 @@ def _internal_id(stix):
     return stix.get("id")
 
 
-def run(r, push, mark):
+def run(r, push, mark, get_relations):
     base = os.environ["OPENCTI_URL"].rstrip("/")
     url = f"{base}/stream/{os.environ['OPENCTI_STREAM_ID']}"
 
@@ -81,6 +85,7 @@ def run(r, push, mark):
                                     "pattern_type": stix.get("pattern_type"),
                                     "valid_from": stix.get("valid_from"),
                                     "score": _score(stix),
+                                    "relations": get_relations(_internal_id(stix)),
                                     "created_at": stix.get("created"),
                                 })
                         if eid:

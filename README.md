@@ -42,6 +42,10 @@ Collector memperkaya observable baru OpenCTI (IP & domain) dan mengirim ke list 
 | Asset Info | GLPI Computer yang IP-nya cocok |
 | Domain Age | RDAP (gratis), fallback VirusTotal |
 
+Event indikator OpenCTI di `opencti-events` menyertakan `score` dan `relations`.
+Relasi memuat relasi masuk maupun keluar, dengan tipe relasi dan ringkasan entitas
+`from`/`to`.
+
 Template Elasticsearch agar peta/tanggal terbaca benar (jalankan sekali di Kibana Dev Tools):
 
     PUT _index_template/enrichment

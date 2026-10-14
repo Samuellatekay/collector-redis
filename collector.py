@@ -75,6 +75,43 @@ def push(key, source, doc):
 
 # ------------------------------------------------------------------ OpenCTI (keluar, polling / fallback)
 
+def _relation_entity(entity):
+    if not isinstance(entity, dict):
+        return entity
+    return {
+        key: entity[key]
+        for key in ("id", "entity_type", "name", "observable_value", "value")
+        if entity.get(key) is not None
+    }
+
+
+def _indicator_relations(client, indicator_id):
+    if not indicator_id:
+        return []
+
+    relations = {}
+    for direction in ("fromId", "toId"):
+        items = client.stix_core_relationship.list(
+            **{direction: indicator_id}, first=100)
+        for relation in items or []:
+            relation_id = relation.get("id")
+            key = relation_id or (
+                relation.get("relationship_type"),
+                (relation.get("from") or {}).get("id"),
+                (relation.get("to") or {}).get("id"),
+            )
+            relations.setdefault(key, {
+                "id": relation_id,
+                "relationship_type": relation.get("relationship_type"),
+                "description": relation.get("description"),
+                "start_time": relation.get("start_time"),
+                "stop_time": relation.get("stop_time"),
+                "from": _relation_entity(relation.get("from")),
+                "to": _relation_entity(relation.get("to")),
+            })
+    return list(relations.values())
+
+
 def collect_opencti(client):
     last = r.hget(STATE_KEY, "opencti_last") or "1970-01-01T00:00:00.000Z"
     filters = {
@@ -97,6 +134,7 @@ def collect_opencti(client):
             "pattern_type": i.get("pattern_type"),
             "valid_from": i.get("valid_from"),
             "score": i.get("x_opencti_score"),
+            "relations": _indicator_relations(client, i["id"]),
             "created_at": i.get("created_at"),
         })
         sent += 1
@@ -406,7 +444,11 @@ if __name__ == "__main__":
 
     if STREAM_ID:
         import opencti_stream
-        threading.Thread(target=opencti_stream.run, args=(r, push, MARK), daemon=True).start()
+        threading.Thread(
+            target=opencti_stream.run,
+            args=(r, push, MARK, lambda indicator_id: _indicator_relations(client, indicator_id)),
+            daemon=True,
+        ).start()
         log.info("OpenCTI: mode live stream (id=%s)", STREAM_ID)
     else:
         start_loop("opencti", lambda: collect_opencti(client), INTERVAL)
