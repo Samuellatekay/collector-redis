@@ -36,8 +36,9 @@ REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_PASS = os.environ["REDIS_PASS"]
 REDIS_DB = int(os.getenv("REDIS_DB", "2"))
 
-INTERVAL = int(os.getenv("POLL_INTERVAL", "60"))              # enrichment + fallback polling OpenCTI
-GLPI_INTERVAL = float(os.getenv("GLPI_POLL_INTERVAL", "5"))   # polling tiket GLPI (boleh desimal, mis. 0.5)
+INTERVAL = int(os.getenv("POLL_INTERVAL", "60"))              # enrichment
+OPENCTI_INTERVAL = float(os.getenv("OPENCTI_POLL_INTERVAL", "1"))
+GLPI_INTERVAL = float(os.getenv("GLPI_POLL_INTERVAL", "1"))
 BLPOP_TIMEOUT = float(os.getenv("BLPOP_TIMEOUT", "1"))        # lama consumer menunggu antrean outbound (detik)
 ENRICH_INTERVAL = float(os.getenv("ENRICH_INTERVAL", str(INTERVAL)))  # jeda siklus enrichment (detik, boleh desimal)
 BATCH = int(os.getenv("BATCH_SIZE", "200"))
@@ -430,14 +431,15 @@ def consume_outbound(client):
 # ------------------------------------------------------------------ Main
 
 def start_loop(name, fn, seconds):
-    """Jalankan fn berulang di thread sendiri dengan jeda 'seconds'."""
+    """Jalankan fn berulang dengan jeda antarawal siklus 'seconds'."""
     def loop():
         while True:
+            started = time.monotonic()
             try:
                 fn()
             except Exception as e:
                 log.error("Gagal collect %s: %s", name, e)
-            time.sleep(seconds)
+            time.sleep(max(0, seconds - (time.monotonic() - started)))
     t = threading.Thread(target=loop, name=name, daemon=True)
     t.start()
     return t
@@ -457,8 +459,8 @@ if __name__ == "__main__":
         ).start()
         log.info("OpenCTI: mode live stream (id=%s)", STREAM_ID)
     else:
-        start_loop("opencti", lambda: collect_opencti(client), INTERVAL)
-        log.info("OpenCTI: mode polling tiap %ss", INTERVAL)
+        start_loop("opencti", lambda: collect_opencti(client), OPENCTI_INTERVAL)
+        log.info("OpenCTI: mode polling tiap %ss", OPENCTI_INTERVAL)
 
     start_loop("glpi", collect_glpi, GLPI_INTERVAL)
     start_loop("enrichment",

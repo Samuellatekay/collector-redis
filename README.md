@@ -64,6 +64,12 @@ melalui collector dari antrean masuk. Data lain dari OpenCTI/GLPI tidak diterusk
 oleh jalur tersebut. Proses enrichment (`enrichment-events`) tetap memindai observable
 baru sesuai konfigurasi enrichment dan tidak dibatasi oleh penanda ini.
 
+Polling GLPI berjalan setiap 1 detik. OpenCTI memakai live stream bila
+`OPENCTI_STREAM_ID` tersedia; jika tidak, polling fallback berjalan setiap 1 detik.
+Jeda dihitung antarpemulaian siklus, sehingga panggilan API yang memakan waktu lebih
+dari satu detik tetap membatasi frekuensi aktual. Enrichment tetap berjalan tiap
+60 detik secara default.
+
 Template Elasticsearch agar peta/tanggal terbaca benar (jalankan sekali di Kibana Dev Tools):
 
     PUT _index_template/enrichment

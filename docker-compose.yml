@@ -7,8 +7,9 @@ services:
       - REDIS_HOST=${REDIS_HOST}
       - REDIS_PASS=${REDIS_PASS}
       - REDIS_DB=2
-      - POLL_INTERVAL=60                                # enrichment (dan polling OpenCTI jika stream tidak dipakai)
-      - GLPI_POLL_INTERVAL=${GLPI_POLL_INTERVAL:-5}     # polling tiket GLPI
+      - POLL_INTERVAL=60                                # enrichment
+      - OPENCTI_POLL_INTERVAL=1                         # polling jika live stream tidak dipakai
+      - GLPI_POLL_INTERVAL=1                            # polling tiket
       - BATCH_SIZE=200
       - OPENCTI_URL=${OPENCTI_URL}
       - OPENCTI_TOKEN=${OPENCTI_TOKEN}
