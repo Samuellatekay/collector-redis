@@ -116,7 +116,7 @@ echo "=== Sending one synthetic Wazuh alert via Beats ${BEATS_HOST}:${BEATS_PORT
 echo "Test label: $TEST_LABEL"
 docker run --rm --network host -v "$TEMP_DIR:/test:ro" "$FILEBEAT_IMAGE" \
   -e --strict.perms=false -c /test/filebeat.yml \
-  --path.data=/tmp/filebeat-test-data --path.logs=/tmp/filebeat-test-logs -once
+  --path.data=/tmp/filebeat-test-data --path.logs=/tmp/filebeat-test-logs --once
 if [[ $? != 0 ]]; then
   echo "Filebeat could not send the event. Check Logstash port, network, and Beats TLS settings." >&2
   exit 1
