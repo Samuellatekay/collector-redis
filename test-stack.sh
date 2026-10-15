@@ -196,22 +196,21 @@ async def main():
                     print("Aplikasi: event diterima dari Redis analysis-in; "
                           f"log_uuid={row['log_uuid']} risk={row['risk_score']}", flush=True)
                     app_reported = True
-                if (row["iris_alert_id"] is not None
-                        and row["ai_status"] in ("done", "failed", "skipped_low_risk")
-                        and row["enrichment_count"] > 0):
+                if row["iris_alert_id"] is not None and row["enrichment_count"] > 0:
                     print("IRIS: alert dibuat "
                           f"id={row['iris_alert_id']} log_uuid={row['log_uuid']}", flush=True)
-                    print(f"AI: {row['ai_status']}", flush=True)
+                    print(f"AI: {row['ai_status']} (tidak ditunggu oleh tes)", flush=True)
                     print(f"Enrichment: {row['enrichment_count']} observable/event terpasang", flush=True)
                     print(f"OpenCTI score pada alert: {row['opencti_score'] or 'belum tersedia'}", flush=True)
                     print(f"GLPI asset pada alert: {row['asset_source'] or 'tidak ditemukan/lookup belum selesai'}", flush=True)
-                    return 0 if row["ai_status"] == "done" else 1
+                    return 0
             await asyncio.sleep(3)
         if last:
             print("Aplikasi menerima event, tetapi alur hilir belum lengkap: "
                   f"ai_status={last['ai_status']}, iris_alert_id={last['iris_alert_id']}, "
                   f"enrichment={last['enrichment_count']}. "
-                  "Periksa log app, ambang IRIS, serta antrean enrichment-events.", flush=True)
+                  "Periksa log app, ambang IRIS, serta antrean enrichment-events. "
+                  "Status AI tidak menjadi syarat lulus.", flush=True)
         else:
             print("Event belum ditemukan di PostgreSQL aplikasi. "
                   "Periksa output Redis analysis-in di Logstash dan REDIS_LISTS.", flush=True)

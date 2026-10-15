@@ -43,8 +43,9 @@ Skrip mengirim satu alert Wazuh sintetis lewat Beats port 5044 menggunakan Fileb
 Docker image. Event memakai rule level 12 agar pipeline mengirim alert asli ke Redis
 `analysis-in` dan membuat clone ke `outbound-opencti` serta `outbound-glpi`. Skrip
 kemudian menunggu Indicator dan ticket uji ditemukan, record aplikasi muncul di
-PostgreSQL, enrichment masuk ke record, analisis AI selesai, dan alert tercatat di
-IRIS. Hasil AI `failed` tetap ditampilkan dan membuat tes berstatus tidak lengkap.
+PostgreSQL, enrichment masuk ke record, dan alert tercatat di IRIS. AI tetap berjalan
+sesuai konfigurasi aplikasi, tetapi skrip tidak menunggu hasil AI dan status AI tidak
+memengaruhi kelulusan tes.
 `--yes` wajib karena tes membuat objek nyata di OpenCTI, GLPI, dan IRIS; hapus objek
 uji setelah selesai. Tes tidak mengirim trafik ke IP `--ip`.
 Karena Observable contoh mungkin sudah melewati cursor polling collector, skrip
