@@ -18,6 +18,8 @@ import time
 import json
 import logging
 import threading
+import ipaddress
+import re
 from datetime import datetime, timezone
 
 import redis
@@ -172,6 +174,55 @@ def glpi_kill(token):
 # Dipakai enrichment.py (antarmuka tidak diubah)
 GLPI = {"url": GLPI_URL, "session": glpi_session, "headers": glpi_headers, "kill": glpi_kill}
 
+
+def alert_ip(msg):
+    candidates = [msg.get("ip"), msg.get("source_ip"), msg.get("src_ip"), msg.get("srcip")]
+    content = msg.get("content") or ""
+    if not isinstance(content, str):
+        content = str(content)
+    match = re.search(
+        r"\b(?:source\s*ip|src\s*ip|ip\s*address|ip)\s*[:=]\s*([0-9a-fA-F:.]+)",
+        content,
+        re.IGNORECASE,
+    )
+    if match:
+        candidates.append(match.group(1))
+    for candidate in candidates:
+        if not isinstance(candidate, str):
+            continue
+        try:
+            return str(ipaddress.ip_address(candidate.strip()))
+        except ValueError:
+            continue
+    return None
+
+
+def ticket_asset_section(msg, token):
+    ip = alert_ip(msg)
+    if not ip:
+        return "\n\n--- GLPI Asset Info ---\nTidak ada IP alert untuk mencari aset di GLPI."
+
+    asset = enrichment.asset_info(ip, GLPI, token)
+    lines = [f"\n\n--- GLPI Asset Info (IP: {ip}) ---"]
+    if asset.get("error"):
+        lines.append(f"Pencarian aset gagal: {asset['error']}")
+    elif not asset.get("found"):
+        lines.append("Aset dengan IP ini tidak ditemukan di inventaris GLPI.")
+    else:
+        for index, item in enumerate(asset["items"], start=1):
+            if index > 1:
+                lines.append("")
+            lines.extend([
+                f"Name: {item.get('name') or 'Tidak tersedia'}",
+                f"IP address: {ip}",
+                f"User / pemilik: {item.get('owner') or 'Tidak tersedia'}",
+                f"Serial number: {item.get('serial_number') or 'Tidak tersedia'}",
+                f"Operating system: {item.get('operating_system') or 'Tidak tersedia'}",
+                f"Status: {item.get('status') or 'Tidak tersedia'}",
+            ])
+    return "\n".join(lines)
+
+
 # Sesi GLPI yang dipakai ulang khusus untuk polling tiket
 _glpi_token = None
 
@@ -299,9 +350,13 @@ def send_glpi(msg):
     try:
         h = glpi_headers(token)
         if action == "create_ticket":
+            content = msg.get("content") or ""
+            if not isinstance(content, str):
+                content = str(content)
+            content += ticket_asset_section(msg, token)
             body = {"input": {
                 "name": f"{MARK} {msg['title']}",
-                "content": msg.get("content", ""),
+                "content": content,
                 "urgency": int(msg.get("urgency", 3)),
                 "type": int(msg.get("ticket_type", 1)),   # 1 = Incident, 2 = Request
             }}

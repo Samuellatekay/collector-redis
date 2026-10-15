@@ -29,7 +29,7 @@ CACHE_TTL = int(os.getenv("ENRICH_CACHE_TTL", "86400"))     # detik
 ENRICH_DELAY = int(os.getenv("ENRICH_DELAY_SECONDS", "120"))  # beri waktu connector OpenCTI
 ASSET_ENABLED = os.getenv("ENRICH_ASSET", "true").lower() == "true"
 
-OBS_TYPES = ["IPv4-Addr", "IPv6-Addr", "Domain-Name"]
+OBS_TYPES = ["IPv4-Addr", "IPv6-Addr", "Domain-Name", "StixFile"]
 HTTP_TIMEOUT = 20
 
 # Field pencarian GLPI untuk itemtype Computer (cek: GET /listSearchOptions/Computer)
@@ -67,6 +67,26 @@ def is_ip(value):
         return True
     except ValueError:
         return False
+
+
+def file_hash(obs):
+    hashes = obs.get("hashes") or {}
+    if not isinstance(hashes, dict):
+        return None
+    supported = {
+        "sha512": ("SHA-512", 128),
+        "sha256": ("SHA-256", 64),
+        "sha1": ("SHA-1", 40),
+        "md5": ("MD5", 32),
+    }
+    for key, (algorithm, length) in supported.items():
+        for name, value in hashes.items():
+            normalized = str(name).lower().replace("-", "").replace("_", "")
+            if normalized == key and isinstance(value, str):
+                value = value.strip().lower()
+                if len(value) == length and all(c in "0123456789abcdef" for c in value):
+                    return {"algorithm": algorithm, "value": value}
+    return None
 
 
 # ------------------------------------------------------------------ OpenCTI context
@@ -149,7 +169,7 @@ def abuseipdb(ip):
 
 
 def virustotal(kind, value):
-    """kind: 'ip_addresses' atau 'domains'. Mengembalikan atribut mentah VT."""
+    """kind: 'ip_addresses', 'domains', atau 'files'."""
     if not VT_API_KEY:
         return None
     time.sleep(VT_DELAY)  # jaga rate limit free tier
@@ -205,7 +225,7 @@ def domain_age(domain, vt_attrs=None):
 # ------------------------------------------------------------------ Asset info (GLPI)
 def asset_info(ip, glpi, token):
     if not ASSET_ENABLED or token is None:
-        return {"found": False, "items": []}
+        return {"found": False, "items": [], "error": "GLPI asset lookup is disabled"}
     params = {
         "criteria[0][field]": 126,
         "criteria[0][searchtype]": "contains",
@@ -219,10 +239,14 @@ def asset_info(ip, glpi, token):
                            headers=glpi["headers"](token), params=params, timeout=30)
     except requests.RequestException as e:
         log.warning("GLPI asset search gagal: %s", e)
-        return {"found": False, "items": []}
+        return {"found": False, "items": [], "error": str(e)}
     if res.status_code not in (200, 206):
         log.warning("GLPI asset search status %s: %s", res.status_code, res.text[:150])
-        return {"found": False, "items": []}
+        return {
+            "found": False,
+            "items": [],
+            "error": f"GLPI search returned HTTP {res.status_code}",
+        }
 
     items = []
     for row in res.json().get("data", []) or []:
@@ -230,14 +254,63 @@ def asset_info(ip, glpi, token):
         ips = item.get("ip")
         ips = ips if isinstance(ips, list) else [ips]
         if ip in [str(x) for x in ips if x]:   # cocokkan IP persis
+            item.update({
+                "serial_number": None,
+                "operating_system": None,
+                "owner": item.get("user"),
+            })
+            computer_id = item.get("id")
+            if computer_id:
+                try:
+                    details = requests.get(
+                        f"{glpi['url']}/Computer/{computer_id}",
+                        headers=glpi["headers"](token),
+                        params={"expand_dropdowns": "true"},
+                        timeout=30,
+                    )
+                    details.raise_for_status()
+                    details = details.json()
+                    item["name"] = details.get("name") or item.get("name")
+                    item["serial_number"] = details.get("serial")
+                    item["status"] = details.get("states_id") or item.get("status")
+                    os_name = details.get("operatingsystems_id") or details.get("os")
+                    os_version = details.get("operatingsystemversions_id") or details.get("os_version")
+                    item["operating_system"] = " ".join(
+                        str(value) for value in (os_name, os_version) if value
+                    ) or None
+                    owner = details.get("users_id") or details.get("user") or item.get("user")
+                    if isinstance(owner, dict):
+                        owner = owner.get("name") or owner.get("id")
+                    if isinstance(owner, (int, str)) and str(owner).isdigit() and int(owner) > 0:
+                        user_res = requests.get(
+                            f"{glpi['url']}/User/{owner}",
+                            headers=glpi["headers"](token),
+                            params={"expand_dropdowns": "true"},
+                            timeout=30,
+                        )
+                        user_res.raise_for_status()
+                        user = user_res.json()
+                        owner = " ".join(
+                            str(value) for value in (
+                                user.get("firstname"), user.get("realname")
+                            ) if value
+                        ) or user.get("name") or owner
+                    item["owner"] = owner
+                except (requests.RequestException, ValueError) as e:
+                    log.warning("Detail aset GLPI id=%s gagal: %s", computer_id, e)
             items.append(item)
-    return {"found": bool(items), "items": items}
+    return {"found": bool(items), "items": items, "error": None}
 
 
 # ------------------------------------------------------------------ Orkestrasi
 def enrich_one(client, r, obs, glpi, token):
-    value = obs["observable_value"]
     etype = obs["entity_type"]
+    hash_info = file_hash(obs) if etype == "StixFile" else None
+    value = hash_info["value"] if hash_info else obs.get("observable_value")
+    if etype == "StixFile" and not hash_info:
+        log.info("StixFile %s dilewati: tidak memiliki hash MD5/SHA-1/SHA-256/SHA-512 valid",
+                 obs.get("id", "-"))
+        return None
     ctx = opencti_context(client, obs)
 
     cache_key = f"enrich:cache:{etype}:{value}"
@@ -258,7 +331,7 @@ def enrich_one(client, r, obs, glpi, token):
             }
             ext["_vt_stats"] = vt_stats
             ext["_abuse"] = ab
-        else:  # Domain-Name
+        elif etype == "Domain-Name":
             vt = virustotal("domains", value)
             vt_stats = (vt or {}).get("last_analysis_stats")
             ext["reputation"] = {
@@ -267,6 +340,20 @@ def enrich_one(client, r, obs, glpi, token):
                                "categories": (vt or {}).get("categories")} if vt else None,
             }
             ext["domain_age"] = domain_age(value, vt)
+            ext["_vt_stats"] = vt_stats
+            ext["_abuse"] = None
+        else:  # StixFile
+            vt = virustotal("files", value)
+            vt_stats = (vt or {}).get("last_analysis_stats")
+            ext["reputation"] = {
+                "abuseipdb": None,
+                "virustotal": {
+                    "stats": vt_stats,
+                    "reputation": (vt or {}).get("reputation"),
+                    "meaningful_name": (vt or {}).get("meaningful_name"),
+                    "type_description": (vt or {}).get("type_description"),
+                } if vt else None,
+            }
             ext["_vt_stats"] = vt_stats
             ext["_abuse"] = None
         r.setex(cache_key, CACHE_TTL, json.dumps(ext, default=str))
@@ -280,6 +367,8 @@ def enrich_one(client, r, obs, glpi, token):
         "opencti": ctx,
         "reputation": ext.get("reputation") or {},
     }
+    if hash_info:
+        doc["file_hash"] = hash_info
     doc["reputation"]["opencti_score"] = ctx["score"]
     doc["reputation"]["labels"] = ctx["labels"]
     doc["reputation"]["verdict"] = verdict(ctx["score"], ext.get("_abuse"), ext.get("_vt_stats"))
@@ -287,7 +376,7 @@ def enrich_one(client, r, obs, glpi, token):
     if etype in ("IPv4-Addr", "IPv6-Addr"):
         doc["geolocation"] = ext.get("geolocation") or {"available": False}
         doc["asset"] = asset_info(value, glpi, token)   # selalu fresh, tidak di-cache
-    else:
+    elif etype == "Domain-Name":
         doc["domain_age"] = ext.get("domain_age") or {"available": False}
     return doc
 
@@ -312,7 +401,7 @@ def collect_enrichment(client, r, push, glpi, state_key="collector:state"):
         return
 
     token = None
-    if ASSET_ENABLED and any(i["entity_type"] != "Domain-Name" for i in items):
+    if ASSET_ENABLED and any(i["entity_type"] in ("IPv4-Addr", "IPv6-Addr") for i in items):
         try:
             token = glpi["session"]()
         except Exception as e:
@@ -323,8 +412,9 @@ def collect_enrichment(client, r, push, glpi, state_key="collector:state"):
         for obs in items:
             try:
                 doc = enrich_one(client, r, obs, glpi, token)
-                push("enrichment-events", "enrichment", doc)
-                done += 1
+                if doc is not None:
+                    push("enrichment-events", "enrichment", doc)
+                    done += 1
             except Exception as e:
                 log.error("Enrichment %s gagal: %s", obs.get("observable_value"), e)
             r.hset(state_key, "enrich_last", obs["created_at"])

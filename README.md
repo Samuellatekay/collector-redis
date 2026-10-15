@@ -45,7 +45,7 @@ Salin logstash/collector.conf ke /etc/logstash/conf.d/ lalu restart Logstash.
 Pesan gagal ada di list outbound-glpi:failed / outbound-opencti:failed.
 
 ## 7. Enrichment (Reputation, Geolocation, Asset Info, Domain Age)
-Collector memperkaya observable baru OpenCTI (IP & domain) dan mengirim ke list `enrichment-events`.
+Collector memperkaya observable baru OpenCTI (IP, domain, dan file hash) dan mengirim ke list `enrichment-events`.
 
 | Data | Sumber |
 |---|---|
@@ -53,6 +53,13 @@ Collector memperkaya observable baru OpenCTI (IP & domain) dan mengirim ke list 
 | Geolocation | ip-api.com (gratis) atau ipinfo.io (IPINFO_TOKEN) + relasi located-at OpenCTI |
 | Asset Info | GLPI Computer yang IP-nya cocok |
 | Domain Age | RDAP (gratis), fallback VirusTotal |
+| File hash | SHA-512, SHA-256, SHA-1, atau MD5 dari observable StixFile; reputasi file via VirusTotal |
+
+Alert dengan IP membuat indikator IP di OpenCTI dan tiket GLPI. Collector mencocokkan IP
+tersebut dengan Computer inventaris GLPI dan menambahkan Name, User/pemilik, serial number,
+operating system, dan status ke isi tiket. Informasi aset dikelola di GLPI, bukan diambil
+dari inventaris Wazuh. Alert file integrity dengan hash membuat indikator `StixFile` di
+OpenCTI; hash tidak dipakai untuk pencarian aset GLPI.
 
 Event indikator OpenCTI di `opencti-events` menyertakan `score` dan `relations`.
 Relasi memuat relasi masuk maupun keluar, dengan tipe relasi dan ringkasan entitas
