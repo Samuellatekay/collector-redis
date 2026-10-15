@@ -90,10 +90,30 @@ def file_hash(obs):
 
 
 # ------------------------------------------------------------------ OpenCTI context
+def _opencti_score(stix):
+    if not isinstance(stix, dict):
+        return None
+    if stix.get("x_opencti_score") is not None:
+        return stix["x_opencti_score"]
+    for extension in (stix.get("extensions") or {}).values():
+        if isinstance(extension, dict) and extension.get("score") is not None:
+            return extension["score"]
+    return None
+
+
+def _opencti_labels(stix):
+    labels = stix.get("objectLabel") or [] if isinstance(stix, dict) else []
+    return [
+        label["value"] for label in labels
+        if isinstance(label, dict) and label.get("value")
+    ]
+
+
 def opencti_context(client, obs):
     ctx = {
-        "score": obs.get("x_opencti_score"),
-        "labels": [l.get("value") for l in (obs.get("objectLabel") or []) if l.get("value")],
+        "score": _opencti_score(obs),
+        "labels": _opencti_labels(obs),
+        "indicators": [],
         "locations": [],
     }
     try:
@@ -109,6 +129,49 @@ def opencti_context(client, obs):
             })
     except Exception as e:
         log.debug("Relasi located-at gagal dibaca: %s", e)
+
+    indicator_ids = set()
+    for direction in ("fromId", "toId"):
+        try:
+            relations = client.stix_core_relationship.list(
+                **{direction: obs["id"]}, relationship_type="based-on", first=100
+            )
+        except Exception as e:
+            log.debug("Relasi indicator based-on gagal dibaca (%s): %s", direction, e)
+            continue
+        for relation in relations or []:
+            for endpoint in (relation.get("from"), relation.get("to")):
+                if not isinstance(endpoint, dict):
+                    continue
+                if str(endpoint.get("entity_type", "")).lower() == "indicator":
+                    indicator_id = endpoint.get("id")
+                    if indicator_id:
+                        indicator_ids.add(str(indicator_id))
+
+    for indicator_id in sorted(indicator_ids):
+        try:
+            indicator = client.indicator.read(id=indicator_id)
+        except Exception as e:
+            log.debug("Indicator OpenCTI %s gagal dibaca: %s", indicator_id, e)
+            indicator = None
+        if not isinstance(indicator, dict):
+            continue
+        score = _opencti_score(indicator)
+        labels = _opencti_labels(indicator)
+        ctx["indicators"].append({
+            "id": indicator_id,
+            "name": indicator.get("name"),
+            "score": score,
+            "labels": labels,
+        })
+        if score is not None:
+            try:
+                if ctx["score"] is None or float(score) > float(ctx["score"]):
+                    ctx["score"] = score
+            except (TypeError, ValueError):
+                if ctx["score"] is None:
+                    ctx["score"] = score
+        ctx["labels"] = list(dict.fromkeys([*ctx["labels"], *labels]))
     return ctx
 
 

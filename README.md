@@ -61,6 +61,9 @@ Collector memperkaya observable baru OpenCTI (IP, domain, dan file hash) dan men
 | Domain Age | RDAP (gratis), fallback VirusTotal |
 | File hash | SHA-512, SHA-256, SHA-1, atau MD5 dari observable StixFile; reputasi file via VirusTotal |
 
+Skor dan label OpenCTI diambil dari Indicator yang memiliki relasi `based-on` ke observable,
+karena atribut tersebut tersimpan pada Indicator, bukan selalu pada objek IP/domain/hash.
+
 Alert dengan IP membuat indikator IP di OpenCTI dan tiket GLPI. Collector mencocokkan IP
 tersebut dengan Computer inventaris GLPI dan menambahkan Name, User/pemilik, serial number,
 operating system, dan status ke isi tiket. Informasi aset dikelola di GLPI, bukan diambil
