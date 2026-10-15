@@ -56,7 +56,7 @@ def main() -> int:
     observable = None
     try:
         client = OpenCTIApiClient(collector.OPENCTI_URL, collector.OPENCTI_TOKEN)
-        if ip:
+        if ip and not args.test_label:
             found = client.stix_cyber_observable.list(
                 types=["IPv4-Addr" if ":" not in ip else "IPv6-Addr"],
                 filters={
@@ -126,7 +126,7 @@ def main() -> int:
     token = None
     try:
         token = collector.glpi_session()
-        if ip:
+        if ip and not args.test_label:
             asset = enrichment.asset_info(ip, collector.GLPI, token)
             if asset.get("error"):
                 report("GAGAL", "GLPI", f"pencarian aset gagal: {asset['error']}")

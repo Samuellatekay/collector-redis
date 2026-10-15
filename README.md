@@ -50,7 +50,8 @@ memengaruhi kelulusan tes.
 uji setelah selesai. Tes tidak mengirim trafik ke IP `--ip`.
 Karena Observable contoh mungkin sudah melewati cursor polling collector, skrip
 meminta collector memperkaya ulang hanya IP uji tersebut dan menerbitkan satu
-`enrichment-events`; cursor global tidak diubah.
+`enrichment-events`; cursor global tidak diubah. Waktu tunggu dibatasi sekitar
+30 detik untuk konfirmasi collector dan 60 detik untuk aplikasi/IRIS; AI tidak ditunggu.
 
 Nilai default:
 

@@ -138,16 +138,16 @@ fi
 echo
 echo "=== Waiting for OpenCTI and GLPI collector results ==="
 collector_ok=0
-for attempt in $(seq 1 24); do
+for attempt in $(seq 1 6); do
   collector_output="$("${COMPOSE_COLLECTOR[@]}" exec -T collector \
-    python check_services.py --ip "$IP" --test-label "$TEST_LABEL" 2>&1)"
+    python check_services.py --test-label "$TEST_LABEL" 2>&1)"
   printf '%s\n' "$collector_output"
   if grep -q "OpenCTI test.*Indicator uji ditemukan" <<<"$collector_output" &&
      grep -q "GLPI test.*tiket uji ditemukan" <<<"$collector_output"; then
     collector_ok=1
     break
   fi
-  sleep 5
+  if ((attempt < 6)); then sleep 5; fi
 done
 if ((collector_ok == 0)); then
   echo "OpenCTI Indicator atau GLPI ticket belum terkonfirmasi; lihat log collector dan antrean :failed." >&2
@@ -175,7 +175,7 @@ label = sys.argv[1]
 async def main():
     conn = await asyncpg.connect(os.environ["POSTGRES_DSN"])
     try:
-        deadline = time.monotonic() + 240
+        deadline = time.monotonic() + 60
         last = None
         app_reported = False
         while time.monotonic() < deadline:
@@ -204,7 +204,7 @@ async def main():
                     print(f"OpenCTI score pada alert: {row['opencti_score'] or 'belum tersedia'}", flush=True)
                     print(f"GLPI asset pada alert: {row['asset_source'] or 'tidak ditemukan/lookup belum selesai'}", flush=True)
                     return 0
-            await asyncio.sleep(3)
+            await asyncio.sleep(2)
         if last:
             print("Aplikasi menerima event, tetapi alur hilir belum lengkap: "
                   f"ai_status={last['ai_status']}, iris_alert_id={last['iris_alert_id']}, "
