@@ -58,7 +58,8 @@ Collector memperkaya observable baru OpenCTI (IP, domain, dan file hash) dan men
 Alert dengan IP membuat indikator IP di OpenCTI dan tiket GLPI. Collector mencocokkan IP
 tersebut dengan Computer inventaris GLPI dan menambahkan Name, User/pemilik, serial number,
 operating system, dan status ke isi tiket. Informasi aset dikelola di GLPI, bukan diambil
-dari inventaris Wazuh. Alert file integrity dengan hash membuat indikator `StixFile` di
+dari inventaris Wazuh. Operating system dibaca dari relasi **Computer → Operating systems**
+di GLPI, termasuk nama OS dan versi jika tersedia. Alert file integrity dengan hash membuat indikator `StixFile` di
 OpenCTI; hash tidak dipakai untuk pencarian aset GLPI.
 
 Event indikator OpenCTI di `opencti-events` menyertakan `score` dan `relations`.

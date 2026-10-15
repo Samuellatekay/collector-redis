@@ -273,8 +273,41 @@ def asset_info(ip, glpi, token):
                     item["name"] = details.get("name") or item.get("name")
                     item["serial_number"] = details.get("serial")
                     item["status"] = details.get("states_id") or item.get("status")
-                    os_name = details.get("operatingsystems_id") or details.get("os")
-                    os_version = details.get("operatingsystemversions_id") or details.get("os_version")
+                    os_relation = requests.get(
+                        f"{glpi['url']}/Computer/{computer_id}/Item_OperatingSystem",
+                        headers=glpi["headers"](token),
+                        params={"expand_dropdowns": "true"},
+                        timeout=30,
+                    )
+                    os_relation.raise_for_status()
+                    relations = os_relation.json()
+                    if isinstance(relations, dict):
+                        relations = relations.get("data", [relations])
+                    if isinstance(relations, list) and relations:
+                        os_data = relations[0]
+                    else:
+                        os_data = {}
+                    os_name = _glpi_dropdown_name(
+                        os_data.get("operatingsystems_id"),
+                        "OperatingSystem",
+                        glpi,
+                        token,
+                    )
+                    if not os_name:
+                        os_name = _glpi_dropdown_name(
+                            details.get("operatingsystems_id"), "OperatingSystem", glpi, token
+                        ) or details.get("os")
+                    os_version = _glpi_dropdown_name(
+                        os_data.get("operatingsystemversions_id"),
+                        "OperatingSystemVersion",
+                        glpi,
+                        token,
+                    ) or _glpi_dropdown_name(
+                        details.get("operatingsystemversions_id"),
+                        "OperatingSystemVersion",
+                        glpi,
+                        token,
+                    ) or details.get("os_version")
                     item["operating_system"] = " ".join(
                         str(value) for value in (os_name, os_version) if value
                     ) or None
@@ -300,6 +333,33 @@ def asset_info(ip, glpi, token):
                     log.warning("Detail aset GLPI id=%s gagal: %s", computer_id, e)
             items.append(item)
     return {"found": bool(items), "items": items, "error": None}
+
+
+def _glpi_dropdown_name(value, endpoint, glpi, token):
+    if value is None or value == 0 or value == "":
+        return None
+    if isinstance(value, dict):
+        name = value.get("name")
+        if name:
+            return str(name)
+        value = value.get("id")
+        if value is None:
+            return None
+    if isinstance(value, str) and not value.isdigit():
+        return value
+    try:
+        response = requests.get(
+            f"{glpi['url']}/{endpoint}/{value}",
+            headers=glpi["headers"](token),
+            params={"expand_dropdowns": "true"},
+            timeout=30,
+        )
+        response.raise_for_status()
+        dropdown = response.json()
+        return dropdown.get("name") if isinstance(dropdown, dict) else None
+    except (requests.RequestException, ValueError) as e:
+        log.warning("GLPI dropdown %s id=%s gagal dibaca: %s", endpoint, value, e)
+        return None
 
 
 # ------------------------------------------------------------------ Orkestrasi
