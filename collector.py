@@ -349,7 +349,24 @@ def send_glpi(msg):
     result = None
     try:
         h = glpi_headers(token)
-        if action == "create_ticket":
+        if action == "lookup_asset":
+            ip = alert_ip(msg)
+            if not ip:
+                raise ValueError("lookup_asset membutuhkan IP yang valid")
+            address = ipaddress.ip_address(ip)
+            asset = enrichment.asset_info(ip, GLPI, token)
+            entity_type = "IPv4-Addr" if address.version == 4 else "IPv6-Addr"
+            push("enrichment-events", "enrichment", {
+                "id": f"glpi-asset:{ip}",
+                "type": "alert_enrichment",
+                "entity_type": entity_type,
+                "value": ip,
+                "asset": asset,
+            })
+            result = {"ip": ip, "found": asset.get("found", False)}
+            log.info("GLPI asset lookup dikirim ke enrichment-events ip=%s found=%s",
+                     ip, asset.get("found"))
+        elif action == "create_ticket":
             content = msg.get("content") or ""
             if not isinstance(content, str):
                 content = str(content)

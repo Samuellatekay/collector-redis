@@ -39,6 +39,12 @@ Salin logstash/collector.conf ke /etc/logstash/conf.d/ lalu restart Logstash.
     redis-cli -h 192.168.1.10 -a PASS -n 2 rpush outbound-glpi \
       '{"action":"create_ticket","title":"Tes","content":"Halo GLPI","urgency":3}'
 
+Untuk mencari aset GLPI berdasarkan IP dari aplikasi analisis dan menerbitkan hasilnya
+ke `enrichment-events`:
+
+    redis-cli -h 192.168.1.10 -a PASS -n 2 rpush outbound-glpi \
+      '{"action":"lookup_asset","ip":"192.168.51.143"}'
+
     redis-cli -h 192.168.1.10 -a PASS -n 2 rpush outbound-opencti \
       '{"action":"create_indicator","name":"Tes IP","pattern":"[ipv4-addr:value = '"'"'203.0.113.5'"'"']","score":60}'
 
