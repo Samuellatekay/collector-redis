@@ -37,7 +37,7 @@ Jalankan dari server aplikasi/collector yang memiliki Docker Compose dan dapat
 mencapai input Beats Logstash:
 
     docker compose up -d --build collector
-    bash test-stack.sh --beats-host <IP-atau-hostname-Logstash> --ip 38.60.253.35 --yes
+    bash test-stack.sh --beats-host <IP-atau-hostname-Logstash> --ip 38.60.253.35 --level 12 --yes
 
 Skrip mengirim satu alert Wazuh sintetis lewat Beats port 5044 menggunakan Filebeat
 Docker image. Event memakai rule level 12 agar pipeline mengirim alert asli ke Redis
@@ -56,6 +56,11 @@ Nilai default:
     APP_DIR=/home/haikal/Analisis-Log-by-AI-LLM
     WAZUH_LOGSTASH_PORT=5044
     FILEBEAT_IMAGE=docker.elastic.co/beats/filebeat:8.17.0
+
+Level Wazuh uji bisa diubah dengan `--level 12` sampai `--level 16`.
+Pipeline contoh hanya merutekan level `>=12` ke OpenCTI, GLPI, dan `analysis-in`;
+level lebih rendah tidak akan menguji seluruh alur kecuali ambang di Logstash
+juga diubah.
 
 Ganti host, port, direktori aplikasi, atau image dengan opsi/variabel tersebut jika
 lingkungan berbeda. Pipeline Beats yang diberikan tidak mengaktifkan TLS; bila

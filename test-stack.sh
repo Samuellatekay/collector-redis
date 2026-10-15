@@ -7,10 +7,11 @@ FILEBEAT_IMAGE="${FILEBEAT_IMAGE:-docker.elastic.co/beats/filebeat:8.17.0}"
 BEATS_HOST="${WAZUH_LOGSTASH_HOST:-}"
 BEATS_PORT="${WAZUH_LOGSTASH_PORT:-5044}"
 IP="38.60.253.35"
+LEVEL=12
 CONFIRM=0
 
 usage() {
-  echo "Usage: $0 --beats-host LOGSTASH_HOST [--beats-port 5044] [--ip PUBLIC_IP] --yes"
+  echo "Usage: $0 --beats-host LOGSTASH_HOST [--beats-port 5044] [--ip PUBLIC_IP] [--level 12-16] --yes"
   echo "  Sends a synthetic Wazuh alert over Beats, then waits for collector, app, and IRIS."
   echo "  This creates one test Indicator, GLPI ticket, and IRIS alert; it sends no traffic to --ip."
   echo "  Set APP_DIR, WAZUH_LOGSTASH_HOST, WAZUH_LOGSTASH_PORT, or FILEBEAT_IMAGE to override defaults."
@@ -31,6 +32,11 @@ while (($#)); do
     --ip)
       (($# >= 2)) || { usage >&2; exit 2; }
       IP="$2"
+      shift 2
+      ;;
+    --level)
+      (($# >= 2)) || { usage >&2; exit 2; }
+      LEVEL="$2"
       shift 2
       ;;
     --yes)
@@ -59,6 +65,10 @@ if [[ ! "$BEATS_HOST" =~ ^[A-Za-z0-9._:-]+$ || ! "$BEATS_PORT" =~ ^[0-9]+$ ]] ||
   echo "Invalid Beats host or port." >&2
   exit 2
 fi
+if [[ ! "$LEVEL" =~ ^[0-9]+$ ]] || ((LEVEL < 12 || LEVEL > 16)); then
+  echo "Invalid level: current Logstash pipeline requires Wazuh rule level 12-16." >&2
+  exit 2
+fi
 if ! python3 -c 'import ipaddress,sys; ip=ipaddress.IPv4Address(sys.argv[1]); sys.exit(0 if ip.is_global else 1)' "$IP" >/dev/null 2>&1; then
   echo "The test IP must be a public IPv4 address: $IP" >&2
   exit 2
@@ -84,7 +94,7 @@ cleanup() {
 trap cleanup EXIT
 
 cat > "$TEMP_DIR/alert.json" <<EOF
-{"timestamp":"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)","rule":{"id":"$RULE_ID","level":12,"description":"$TEST_LABEL","groups":["intrusion_detection","authentication_failed"]},"agent":{"id":"999","name":"$AGENT"},"manager":{"name":"pipeline-e2e-test"},"data":{"srcip":"$IP","audit":{"res":"failed"}},"full_log":"Synthetic end-to-end pipeline test only; no connection to the source IP was made."}
+{"timestamp":"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)","rule":{"id":"$RULE_ID","level":$LEVEL,"description":"$TEST_LABEL","groups":["intrusion_detection","authentication_failed"]},"agent":{"id":"999","name":"$AGENT"},"manager":{"name":"pipeline-e2e-test"},"data":{"srcip":"$IP","audit":{"res":"failed"}},"full_log":"Synthetic end-to-end pipeline test only; no connection to the source IP was made."}
 EOF
 
 cat > "$TEMP_DIR/filebeat.yml" <<EOF
@@ -116,6 +126,7 @@ fi
 echo
 echo "=== Sending one synthetic Wazuh alert via Beats ${BEATS_HOST}:${BEATS_PORT} ==="
 echo "Test label: $TEST_LABEL"
+echo "Wazuh rule level: $LEVEL (pipeline routes levels >=12)"
 docker run --rm --network host -v "$TEMP_DIR:/test:ro" "$FILEBEAT_IMAGE" \
   -e --strict.perms=false -c /test/filebeat.yml \
   --path.data=/tmp/filebeat-test-data --path.logs=/tmp/filebeat-test-logs --once
