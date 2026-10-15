@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 log = logging.getLogger("enrichment")
+COLLECTOR_MARK = "[from-collector]"
 
 ABUSEIPDB_KEY = os.getenv("ABUSEIPDB_KEY", "")
 VT_API_KEY = os.getenv("VT_API_KEY", "")
@@ -158,13 +159,17 @@ def opencti_context(client, obs):
             continue
         score = _opencti_score(indicator)
         labels = _opencti_labels(indicator)
+        is_collector_indicator = str(indicator.get("description") or "").startswith(
+            COLLECTOR_MARK
+        )
         ctx["indicators"].append({
             "id": indicator_id,
             "name": indicator.get("name"),
             "score": score,
             "labels": labels,
+            "source": "collector" if is_collector_indicator else "opencti",
         })
-        if score is not None:
+        if score is not None and not is_collector_indicator:
             try:
                 if ctx["score"] is None or float(score) > float(ctx["score"]):
                     ctx["score"] = score

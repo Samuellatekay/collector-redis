@@ -63,6 +63,8 @@ Collector memperkaya observable baru OpenCTI (IP, domain, dan file hash) dan men
 
 Skor dan label OpenCTI diambil dari Indicator yang memiliki relasi `based-on` ke observable,
 karena atribut tersebut tersimpan pada Indicator, bukan selalu pada objek IP/domain/hash.
+Skor Indicator buatan collector sendiri dikecualikan dari reputasi agar severity Wazuh tidak
+disalahartikan sebagai verdict intelijen eksternal.
 
 Alert dengan IP membuat indikator IP di OpenCTI dan tiket GLPI. Collector mencocokkan IP
 tersebut dengan Computer inventaris GLPI dan menambahkan Name, User/pemilik, serial number,
