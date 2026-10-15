@@ -102,6 +102,8 @@ output.logstash:
 logging.level: info
 EOF
 chmod 600 "$TEMP_DIR/alert.json" "$TEMP_DIR/filebeat.yml"
+chmod 755 "$TEMP_DIR"
+chmod 644 "$TEMP_DIR/alert.json" "$TEMP_DIR/filebeat.yml"
 
 echo "=== Preflight: collector Redis/OpenCTI/GLPI ==="
 "${COMPOSE_COLLECTOR[@]}" exec -T collector python check_services.py --ip "$IP"
