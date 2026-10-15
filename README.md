@@ -32,6 +32,35 @@ dari OpenCTI/GLPI (`opencti-events`, `glpi-logs`). Viewer hanya menggunakan Redi
 dari `.env`; ia tidak menghapus pesan dari antrean. Hentikan dengan `Ctrl+C`.
 Redis harus mengizinkan koneksi dari container Compose dan perintah `MONITOR`.
 
+## 4a. Tes end-to-end dari Beats ke IRIS
+Jalankan dari server aplikasi/collector yang memiliki Docker Compose dan dapat
+mencapai input Beats Logstash:
+
+    docker compose up -d --build collector
+    bash test-stack.sh --beats-host <IP-atau-hostname-Logstash> --ip 38.60.253.35 --yes
+
+Skrip mengirim satu alert Wazuh sintetis lewat Beats port 5044 menggunakan Filebeat
+Docker image. Event memakai rule level 12 agar pipeline mengirim alert asli ke Redis
+`analysis-in` dan membuat clone ke `outbound-opencti` serta `outbound-glpi`. Skrip
+kemudian menunggu Indicator dan ticket uji ditemukan, record aplikasi muncul di
+PostgreSQL, enrichment masuk ke record, analisis AI selesai, dan alert tercatat di
+IRIS. Hasil AI `failed` tetap ditampilkan dan membuat tes berstatus tidak lengkap.
+`--yes` wajib karena tes membuat objek nyata di OpenCTI, GLPI, dan IRIS; hapus objek
+uji setelah selesai. Tes tidak mengirim trafik ke IP `--ip`.
+Karena Observable contoh mungkin sudah melewati cursor polling collector, skrip
+meminta collector memperkaya ulang hanya IP uji tersebut dan menerbitkan satu
+`enrichment-events`; cursor global tidak diubah.
+
+Nilai default:
+
+    APP_DIR=/home/haikal/Analisis-Log-by-AI-LLM
+    WAZUH_LOGSTASH_PORT=5044
+    FILEBEAT_IMAGE=docker.elastic.co/beats/filebeat:8.17.0
+
+Ganti host, port, direktori aplikasi, atau image dengan opsi/variabel tersebut jika
+lingkungan berbeda. Pipeline Beats yang diberikan tidak mengaktifkan TLS; bila
+Logstash menggunakan TLS, konfigurasi Filebeat tes perlu ditambah CA/certificate.
+
 ## 5. Logstash (VM-2)
 Salin logstash/collector.conf ke /etc/logstash/conf.d/ lalu restart Logstash.
 
