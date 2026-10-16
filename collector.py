@@ -326,6 +326,56 @@ def _create_observables(pattern):
 
 def send_opencti(client, msg):
     action = msg.get("action")
+    if action == "lookup_enrichment":
+        ip = alert_ip(msg)
+        if not ip:
+            raise ValueError("lookup_enrichment membutuhkan IP yang valid")
+        address = ipaddress.ip_address(ip)
+        entity_type = "IPv4-Addr" if address.version == 4 else "IPv6-Addr"
+        filters = {
+            "mode": "and",
+            "filters": [{"key": "observable_value", "values": [ip], "operator": "eq"}],
+            "filterGroups": [],
+        }
+        observables = client.stix_cyber_observable.list(
+            types=[entity_type], filters=filters, first=100
+        ) or []
+        obs = next((item for item in observables
+                    if item.get("observable_value") == ip), None)
+        if obs is None:
+            log.info("Observable %s belum ada di OpenCTI; pencarian feed tetap dilakukan", ip)
+            obs = {"entity_type": entity_type, "observable_value": ip}
+
+        connectors, inventory_error = enrichment.connector_inventory(client)
+        connector_results = enrichment.connector_lookup_status(
+            client, r, obs, connectors, inventory_error
+        )
+        if obs.get("id"):
+            try:
+                refreshed = client.stix_cyber_observable.read(id=obs["id"])
+                if isinstance(refreshed, dict):
+                    obs = refreshed
+            except Exception:
+                log.exception("Observable OpenCTI gagal dibaca ulang setelah enrichment id=%s",
+                              obs.get("id"))
+
+        result = enrichment.enrich_one(
+            client, r, obs, GLPI, None, include_asset=False
+        )
+        if result is None:
+            raise RuntimeError(f"OpenCTI gagal membentuk hasil lookup untuk {ip}")
+        result["opencti"]["connectors"] = connector_results
+        result["opencti"]["lookup_status"] = (
+            "observable_found" if obs.get("id") else "observable_not_found"
+        )
+        push("enrichment-events", "enrichment", result)
+        log.info("Lookup OpenCTI selesai ip=%s connectors=%d",
+                 ip, len(connector_results))
+        return {
+            "ip": ip,
+            "observable_found": bool(obs.get("id")),
+            "connector_results": connector_results,
+        }
     if action == "create_indicator":
         ind = client.indicator.create(
             name=msg["name"],

@@ -28,6 +28,8 @@ VT_DELAY = int(os.getenv("VT_DELAY", "16"))                 # free tier: 4 reque
 MAX_PER_CYCLE = int(os.getenv("ENRICH_MAX_PER_CYCLE", "20"))
 CACHE_TTL = int(os.getenv("ENRICH_CACHE_TTL", "86400"))     # detik
 ENRICH_DELAY = int(os.getenv("ENRICH_DELAY_SECONDS", "120"))  # beri waktu connector OpenCTI
+CONNECTOR_WAIT_SECONDS = max(0, int(os.getenv("ENRICH_CONNECTOR_WAIT_SECONDS", "45")))
+CONNECTOR_CACHE_TTL = max(60, int(os.getenv("ENRICH_CONNECTOR_CACHE_TTL", "86400")))
 ASSET_ENABLED = os.getenv("ENRICH_ASSET", "true").lower() == "true"
 
 OBS_TYPES = ["IPv4-Addr", "IPv6-Addr", "Domain-Name", "StixFile"]
@@ -110,65 +112,197 @@ def _opencti_labels(stix):
     ]
 
 
+CONNECTOR_INVENTORY_QUERY = """
+query CollectorConnectorInventory {
+  connectors {
+    id
+    name
+    active
+    connector_type
+    connector_scope
+    connector_state
+  }
+}
+"""
+
+
+def connector_inventory(client):
+    try:
+        result = client.query(CONNECTOR_INVENTORY_QUERY)
+        data = result.get("data") if isinstance(result, dict) else None
+        if not isinstance(data, dict) or "connectors" not in data:
+            errors = result.get("errors") if isinstance(result, dict) else None
+            raise ValueError(f"OpenCTI did not return connector inventory: {errors or result}")
+        connectors = data["connectors"]
+        if not isinstance(connectors, list):
+            raise ValueError("OpenCTI connector inventory is not a list")
+    except Exception as exc:
+        log.exception("Daftar connector OpenCTI gagal dibaca")
+        return [], f"{type(exc).__name__}: {str(exc)[:200]}"
+    if any(not isinstance(item, dict) for item in connectors):
+        log.error("OpenCTI connector inventory contains a non-object entry")
+        return [], "OpenCTI connector inventory contains an invalid entry"
+    log.info("OpenCTI connector inventory loaded count=%d", len(connectors))
+    return connectors, None
+
+
+def _connector_scope(connector):
+    scope = connector.get("connector_scope") or connector.get("scope") or []
+    if isinstance(scope, str):
+        return {item.strip().lower() for item in scope.split(",") if item.strip()}
+    if isinstance(scope, list):
+        return {str(item).strip().lower() for item in scope if item}
+    return set()
+
+
+def connector_lookup_status(client, r, obs, connectors, inventory_error=None):
+    entity_type = str(obs.get("entity_type") or "").lower()
+    report = []
+    applicable = []
+    for connector in connectors:
+        kind = str(connector.get("connector_type") or connector.get("type") or "").upper()
+        name = str(connector.get("name") or connector.get("id") or "OpenCTI connector")
+        active = connector.get("active") is not False
+        scope = _connector_scope(connector)
+        if kind == "EXTERNAL_IMPORT":
+            report.append({
+                "name": name, "type": kind,
+                "status": "indexed_lookup" if active else "inactive",
+                "details": "IOC dicari pada data feed yang sudah diimpor ke OpenCTI"
+                           if active else "connector tidak aktif",
+            })
+        elif kind == "INTERNAL_ENRICHMENT":
+            if not active:
+                report.append({"name": name, "type": kind, "status": "inactive"})
+            elif scope and entity_type not in scope and "all" not in scope:
+                report.append({"name": name, "type": kind, "status": "out_of_scope"})
+            else:
+                applicable.append(connector)
+        elif kind:
+            report.append({"name": name, "type": kind, "status": "not_a_lookup_connector"})
+
+    if inventory_error:
+        report.append({
+            "name": "OpenCTI connector inventory", "type": "system",
+            "status": "error", "details": inventory_error,
+        })
+
+    work_items = []
+    observable_id = obs.get("id")
+    for connector in applicable:
+        connector_id = str(connector.get("id") or "")
+        name = str(connector.get("name") or connector_id or "Internal enrichment")
+        entry = {"name": name, "type": "INTERNAL_ENRICHMENT"}
+        if not observable_id or not connector_id:
+            entry.update(status="error", details="observable atau connector ID tidak tersedia")
+            report.append(entry)
+            continue
+        cache_key = f"enrich:connector:v1:{observable_id}:{connector_id}"
+        cached = r.get(cache_key)
+        if cached:
+            try:
+                previous = json.loads(cached)
+                if isinstance(previous, dict):
+                    previous["cached"] = True
+                    report.append(previous)
+                    continue
+            except (TypeError, ValueError):
+                log.warning("Cache status connector rusak key=%s", cache_key)
+        try:
+            work_id = client.stix_cyber_observable.ask_for_enrichment(
+                id=observable_id, connector_id=connector_id
+            )
+            entry.update(status="queued", work_id=str(work_id))
+            report.append(entry)
+            work_items.append((entry, cache_key, str(work_id)))
+        except Exception as exc:
+            log.exception("Gagal meminta enrichment connector=%s observable=%s",
+                          name, observable_id)
+            entry.update(status="error", details=f"{type(exc).__name__}: {str(exc)[:200]}")
+            report.append(entry)
+
+    deadline = time.monotonic() + CONNECTOR_WAIT_SECONDS
+    pending = list(work_items)
+    while pending:
+        for item in list(pending):
+            entry, _, work_id = item
+            try:
+                work = client.work.get_work(work_id) or {}
+                status = str(work.get("status") or "").lower()
+                errors = work.get("errors")
+                if status in {"complete", "completed"}:
+                    entry["status"] = "failed" if errors else "completed"
+                    if errors:
+                        entry["details"] = str(errors)[:300]
+                    pending.remove(item)
+                elif status in {"error", "failed", "cancelled"}:
+                    entry["status"] = "failed"
+                    if errors:
+                        entry["details"] = str(errors)[:300]
+                    pending.remove(item)
+            except Exception as exc:
+                log.exception("Status work OpenCTI gagal dibaca work_id=%s", work_id)
+                entry["status"] = "error"
+                entry["details"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+                pending.remove(item)
+        remaining = deadline - time.monotonic()
+        if pending and remaining > 0:
+            time.sleep(min(1, remaining))
+        else:
+            break
+
+    for entry, _, _ in pending:
+        entry["status"] = "timeout"
+        entry["details"] = f"belum selesai dalam {CONNECTOR_WAIT_SECONDS} detik"
+    for entry, cache_key, _ in work_items:
+        entry.pop("work_id", None)
+        try:
+            r.setex(cache_key, CONNECTOR_CACHE_TTL, json.dumps(entry, default=str))
+        except Exception:
+            log.exception("Gagal menyimpan status connector %s ke cache", entry.get("name"))
+    return report
+
+
 def opencti_context(client, obs):
     ctx = {
         "score": _opencti_score(obs),
         "labels": _opencti_labels(obs),
         "indicators": [],
         "locations": [],
+        "sources": [],
+        "external_import_match_count": 0,
     }
-    try:
-        rels = client.stix_core_relationship.list(
-            fromId=obs["id"], relationship_type="located-at", first=10)
-        for rel in rels or []:
-            to = rel.get("to") or {}
-            ctx["locations"].append({
-                "type": to.get("entity_type"),
-                "name": to.get("name"),
-                "latitude": to.get("latitude"),
-                "longitude": to.get("longitude"),
-            })
-    except Exception as e:
-        log.debug("Relasi located-at gagal dibaca: %s", e)
 
-    indicator_ids = set()
-    for direction in ("fromId", "toId"):
-        try:
-            relations = client.stix_core_relationship.list(
-                **{direction: obs["id"]}, relationship_type="based-on", first=100
-            )
-        except Exception as e:
-            log.debug("Relasi indicator based-on gagal dibaca (%s): %s", direction, e)
-            continue
-        for relation in relations or []:
-            for endpoint in (relation.get("from"), relation.get("to")):
-                if not isinstance(endpoint, dict):
-                    continue
-                if str(endpoint.get("entity_type", "")).lower() == "indicator":
-                    indicator_id = endpoint.get("id")
-                    if indicator_id:
-                        indicator_ids.add(str(indicator_id))
-
-    for indicator_id in sorted(indicator_ids):
-        try:
-            indicator = client.indicator.read(id=indicator_id)
-        except Exception as e:
-            log.debug("Indicator OpenCTI %s gagal dibaca: %s", indicator_id, e)
-            indicator = None
+    def add_indicator(indicator):
         if not isinstance(indicator, dict):
-            continue
+            return
         score = _opencti_score(indicator)
         labels = _opencti_labels(indicator)
         is_collector_indicator = str(indicator.get("description") or "").startswith(
             COLLECTOR_MARK
         )
+        created_by = indicator.get("createdBy") or indicator.get("created_by")
+        if isinstance(created_by, dict):
+            created_by = {key: created_by[key] for key in ("id", "name")
+                          if created_by.get(key)}
+        references = indicator.get("externalReferences") or indicator.get("external_references") or []
+        references = [
+            {key: ref[key] for key in ("source_name", "url", "external_id") if ref.get(key)}
+            for ref in references if isinstance(ref, dict)
+        ] if isinstance(references, list) else []
         ctx["indicators"].append({
-            "id": indicator_id,
-            "name": indicator.get("name"),
-            "score": score,
-            "labels": labels,
-            "source": "collector" if is_collector_indicator else "opencti",
+            "id": indicator.get("id"), "name": indicator.get("name"),
+            "score": score, "labels": labels,
+            "source": "collector" if is_collector_indicator else created_by or "opencti",
+            "created_by": created_by, "external_references": references,
         })
+        if created_by and not is_collector_indicator:
+            ctx["sources"].append(created_by)
+        ctx["sources"].extend(
+            ref["source_name"] for ref in references if ref.get("source_name")
+        )
+        if not is_collector_indicator:
+            ctx["external_import_match_count"] += 1
         if score is not None and not is_collector_indicator:
             try:
                 if ctx["score"] is None or float(score) > float(ctx["score"]):
@@ -177,6 +311,57 @@ def opencti_context(client, obs):
                 if ctx["score"] is None:
                     ctx["score"] = score
         ctx["labels"] = list(dict.fromkeys([*ctx["labels"], *labels]))
+
+    observable_id = obs.get("id")
+    if not observable_id:
+        value = obs.get("observable_value")
+        if value:
+            try:
+                candidates = client.indicator.list(search=value, first=100) or []
+            except Exception:
+                log.exception("Pencarian indicator OpenCTI berdasarkan IOC gagal value=%s", value)
+                candidates = []
+            exact_values = (f"'{value}'", f'"{value}"')
+            for indicator in candidates:
+                pattern = str(indicator.get("pattern") or "") if isinstance(indicator, dict) else ""
+                if any(exact in pattern for exact in exact_values):
+                    add_indicator(indicator)
+        return ctx
+
+    try:
+        rels = client.stix_core_relationship.list(
+            fromId=observable_id, relationship_type="located-at", first=10)
+        for rel in rels or []:
+            to = rel.get("to") or {}
+            ctx["locations"].append({
+                "type": to.get("entity_type"),
+                "name": to.get("name"),
+                "latitude": to.get("latitude"),
+                "longitude": to.get("longitude"),
+            })
+    except Exception as exc:
+        log.debug("Relasi located-at gagal dibaca: %s", exc)
+
+    indicator_ids = set()
+    for direction in ("fromId", "toId"):
+        try:
+            relations = client.stix_core_relationship.list(
+                **{direction: observable_id}, relationship_type="based-on", first=100
+            )
+        except Exception as exc:
+            log.debug("Relasi indicator based-on gagal dibaca (%s): %s", direction, exc)
+            continue
+        for relation in relations or []:
+            for endpoint in (relation.get("from"), relation.get("to")):
+                if (isinstance(endpoint, dict)
+                        and str(endpoint.get("entity_type") or "").lower() == "indicator"
+                        and endpoint.get("id")):
+                    indicator_ids.add(str(endpoint["id"]))
+    for indicator_id in sorted(indicator_ids):
+        try:
+            add_indicator(client.indicator.read(id=indicator_id))
+        except Exception as exc:
+            log.debug("Indicator OpenCTI %s gagal dibaca: %s", indicator_id, exc)
     return ctx
 
 
@@ -431,7 +616,7 @@ def _glpi_dropdown_name(value, endpoint, glpi, token):
 
 
 # ------------------------------------------------------------------ Orkestrasi
-def enrich_one(client, r, obs, glpi, token):
+def enrich_one(client, r, obs, glpi, token, include_asset=True):
     etype = obs["entity_type"]
     hash_info = file_hash(obs) if etype == "StixFile" else None
     value = hash_info["value"] if hash_info else obs.get("observable_value")
@@ -487,7 +672,6 @@ def enrich_one(client, r, obs, glpi, token):
         r.setex(cache_key, CACHE_TTL, json.dumps(ext, default=str))
 
     doc = {
-        "id": obs["id"],
         "type": "enrichment",
         "entity_type": etype,
         "value": value,
@@ -495,6 +679,32 @@ def enrich_one(client, r, obs, glpi, token):
         "opencti": ctx,
         "reputation": ext.get("reputation") or {},
     }
+    if obs.get("id"):
+        doc["id"] = obs["id"]
+    reputation = doc["reputation"]
+    vt_data = reputation.get("virustotal")
+    vt_stats = ext.get("_vt_stats") or (
+        vt_data.get("stats") if isinstance(vt_data, dict) else None
+    )
+    provider_status = reputation.get("provider_status")
+    provider_status = dict(provider_status) if isinstance(provider_status, dict) else {}
+    if etype in ("IPv4-Addr", "IPv6-Addr"):
+        provider_status.setdefault(
+            "abuseipdb",
+            "API key belum dikonfigurasi" if not ABUSEIPDB_KEY else
+            "tidak berlaku untuk IP private/reserved" if not is_public_ip(value) else
+            "data ditemukan" if ext.get("_abuse") or reputation.get("abuseipdb") else
+            "tidak ada record atau API gagal; periksa log collector",
+        )
+    else:
+        provider_status.setdefault("abuseipdb", "lookup IP saja; tidak berlaku untuk IOC ini")
+    provider_status.setdefault(
+        "virustotal",
+        "API key belum dikonfigurasi" if not VT_API_KEY else
+        "data ditemukan" if vt_data else
+        "tidak ada record atau API gagal; periksa log collector",
+    )
+    reputation["provider_status"] = provider_status
     if hash_info:
         doc["file_hash"] = hash_info
     doc["reputation"]["opencti_score"] = ctx["score"]
@@ -503,7 +713,8 @@ def enrich_one(client, r, obs, glpi, token):
 
     if etype in ("IPv4-Addr", "IPv6-Addr"):
         doc["geolocation"] = ext.get("geolocation") or {"available": False}
-        doc["asset"] = asset_info(value, glpi, token)   # selalu fresh, tidak di-cache
+        if include_asset:
+            doc["asset"] = asset_info(value, glpi, token)   # selalu fresh, tidak di-cache
     elif etype == "Domain-Name":
         doc["domain_age"] = ext.get("domain_age") or {"available": False}
     return doc

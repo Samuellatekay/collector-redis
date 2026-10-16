@@ -97,6 +97,22 @@ Collector memperkaya observable baru OpenCTI (IP, domain, dan file hash) dan men
 | Domain Age | RDAP (gratis), fallback VirusTotal |
 | File hash | SHA-512, SHA-256, SHA-1, atau MD5 dari observable StixFile; reputasi file via VirusTotal |
 
+Untuk setiap IP sumber/tujuan dari aplikasi analisis, aksi `lookup_enrichment` pada
+`outbound-opencti` memicu lookup connector. Daftar semua **Internal Enrichment** dan
+**External Import** yang terdeteksi, termasuk status aktif/scope dan hasil job enrichment,
+dikirim di `enrichment-events` untuk ditampilkan IRIS. Inventory dibaca dari GraphQL
+`connectors`; SDK `connector.list()` hanya memberi konfigurasi worker tanpa tipe connector.
+
+**External Import** bukan API lookup per IOC. Feed dicari melalui indicator dan external
+reference yang sudah terindeks di OpenCTI; status inventory tetap ditampilkan per feed,
+tetapi match tidak dapat dikaitkan ke feed tertentu jika metadata sumbernya tidak ada.
+Feed harus berhasil sinkronisasi dan token OpenCTI collector harus diizinkan melihat
+inventory serta meminta enrichment.
+
+Batas tunggu job Internal Enrichment default 45 detik dan cache status connector 24 jam.
+Nilainya dapat diubah dengan `ENRICH_CONNECTOR_WAIT_SECONDS` dan
+`ENRICH_CONNECTOR_CACHE_TTL` di `.env`.
+
 Skor dan label OpenCTI diambil dari Indicator yang memiliki relasi `based-on` ke observable,
 karena atribut tersebut tersimpan pada Indicator, bukan selalu pada objek IP/domain/hash.
 Skor Indicator buatan collector sendiri dikecualikan dari reputasi agar severity Wazuh tidak
