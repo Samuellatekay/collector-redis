@@ -93,7 +93,7 @@ Collector memperkaya observable baru OpenCTI (IP, domain, dan file hash) dan men
 |---|---|
 | Reputation | skor+label OpenCTI, AbuseIPDB (ABUSEIPDB_KEY), VirusTotal (VT_API_KEY) |
 | Geolocation | ip-api.com (gratis) atau ipinfo.io (IPINFO_TOKEN) + relasi located-at OpenCTI |
-| Asset Info | GLPI Computer yang IP-nya cocok melalui field IP NetworkPort |
+| Asset Info | GLPI Computer yang IP-nya cocok melalui NetworkPort atau relasi IPAddress |
 | Domain Age | RDAP (gratis), fallback VirusTotal |
 | File hash | SHA-512, SHA-256, SHA-1, atau MD5 dari observable StixFile; reputasi file via VirusTotal |
 
@@ -123,7 +123,8 @@ Skor Indicator buatan collector sendiri dikecualikan dari reputasi agar severity
 disalahartikan sebagai verdict intelijen eksternal.
 
 Alert dengan IP membuat indikator IP di OpenCTI dan tiket GLPI. Collector mencocokkan IP
-tersebut dengan Computer inventaris GLPI dan menambahkan Name, User/pemilik, serial number,
+tersebut dengan Computer inventaris GLPI, termasuk alamat yang disimpan sebagai IPAddress
+dan ditautkan langsung ke Computer, lalu menambahkan Name, User/pemilik, serial number,
 operating system, dan status ke isi tiket. Informasi aset dikelola di GLPI, bukan diambil
 dari inventaris Wazuh. Operating system dibaca dari relasi **Computer → Operating systems**
 di GLPI, termasuk nama OS dan versi jika tersedia. Alert file integrity dengan hash membuat indikator `StixFile` di

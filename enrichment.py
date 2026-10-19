@@ -607,49 +607,38 @@ def asset_info(ip, glpi, token):
         }
 
     items = []
-    if not isinstance(response_data, dict):
-        return {"found": False, "items": [], "error": "GLPI search returned an invalid response"}
-    for row in response_data.get("data", []) or []:
-        if not isinstance(row, dict):
-            continue
-        ips = [
-            row.get(field_id, row.get(int(field_id)))
-            for field_id in ip_fields
-        ]
-        matching_ips = list(dict.fromkeys(_glpi_ip_values(ips)))
-        item_type = row.get("20", row.get(20))
-        if ip not in matching_ips or str(item_type).lower() != "computer":
-            continue
-        computer_id = row.get("21", row.get(21))
-        if not computer_id:
-            continue
+    search_errors = []
+
+    def computer_asset(computer_id, base):
         item = {
             "id": computer_id,
-            "ip": matching_ips,
-            "name": None,
-            "location": None,
-            "type": None,
-            "status": None,
-            "user": None,
-            "owner": None,
+            "name": base.get("name"),
+            "location": base.get("location"),
+            "type": base.get("type"),
+            "status": base.get("status"),
+            "user": base.get("user"),
+            "ip": base.get("ip") or ip,
             "serial_number": None,
             "operating_system": None,
+            "owner": base.get("user"),
         }
+        if not computer_id:
+            return item
         try:
-            details = requests.get(
+            details_res = requests.get(
                 f"{glpi['url']}/Computer/{computer_id}",
                 headers=glpi["headers"](token),
                 params={"expand_dropdowns": "true"},
                 timeout=30,
             )
-            details.raise_for_status()
-            details = details.json()
-            item["name"] = details.get("name")
+            details_res.raise_for_status()
+            details = details_res.json()
+            item["name"] = details.get("name") or item["name"]
             item["serial_number"] = details.get("serial")
-            item["status"] = details.get("states_id")
+            item["status"] = details.get("states_id") or item["status"]
             item["location"] = details.get("locations_id") or details.get("location")
             item["type"] = details.get("computertypes_id") or details.get("type")
-            item["user"] = details.get("users_id") or details.get("user")
+            item["user"] = details.get("users_id") or details.get("user") or item["user"]
             item["owner"] = item["user"]
             try:
                 os_relation = requests.get(
@@ -662,10 +651,7 @@ def asset_info(ip, glpi, token):
                 relations = os_relation.json()
                 if isinstance(relations, dict):
                     relations = relations.get("data", [relations])
-                if isinstance(relations, list) and relations:
-                    os_data = relations[0]
-                else:
-                    os_data = {}
+                os_data = relations[0] if isinstance(relations, list) and relations else {}
                 os_name = _glpi_dropdown_name(
                     os_data.get("operatingsystems_id"),
                     "OperatingSystem",
@@ -674,7 +660,10 @@ def asset_info(ip, glpi, token):
                 )
                 if not os_name:
                     os_name = _glpi_dropdown_name(
-                        details.get("operatingsystems_id"), "OperatingSystem", glpi, token
+                        details.get("operatingsystems_id"),
+                        "OperatingSystem",
+                        glpi,
+                        token,
                     ) or details.get("os")
                 os_version = _glpi_dropdown_name(
                     os_data.get("operatingsystemversions_id"),
@@ -690,9 +679,9 @@ def asset_info(ip, glpi, token):
                 item["operating_system"] = " ".join(
                     str(value) for value in (os_name, os_version) if value
                 ) or None
-            except (requests.RequestException, ValueError) as e:
-                log.warning("OS aset GLPI id=%s gagal dibaca: %s", computer_id, e)
-            owner = details.get("users_id") or details.get("user")
+            except (requests.RequestException, ValueError) as exc:
+                log.warning("OS aset GLPI id=%s gagal dibaca: %s", computer_id, exc)
+            owner = item["user"]
             if isinstance(owner, dict):
                 owner = owner.get("name") or owner.get("id")
             if isinstance(owner, (int, str)) and str(owner).isdigit() and int(owner) > 0:
@@ -709,13 +698,94 @@ def asset_info(ip, glpi, token):
                         str(value) for value in (user.get("firstname"), user.get("realname"))
                         if value
                     ) or user.get("name") or owner
-                except (requests.RequestException, ValueError) as e:
-                    log.warning("Pemilik aset GLPI user=%s gagal dibaca: %s", owner, e)
+                except (requests.RequestException, ValueError) as exc:
+                    log.warning("Pemilik aset GLPI user=%s gagal dibaca: %s", owner, exc)
             item["owner"] = owner
-        except (requests.RequestException, ValueError) as e:
-            log.warning("Detail aset GLPI id=%s gagal: %s", computer_id, e)
-        items.append(item)
-    return {"found": bool(items), "items": items, "error": None}
+        except (requests.RequestException, ValueError) as exc:
+            log.warning("Detail aset GLPI id=%s gagal: %s", computer_id, exc)
+        return item
+
+    if not isinstance(response_data, dict):
+        return {"found": False, "items": [], "error": "GLPI search returned an invalid response"}
+    for row in response_data.get("data", []) or []:
+        if not isinstance(row, dict):
+            continue
+        ips = [
+            row.get(field_id, row.get(int(field_id)))
+            for field_id in ip_fields
+        ]
+        matching_ips = list(dict.fromkeys(_glpi_ip_values(ips)))
+        item_type = row.get("20", row.get(20))
+        if ip not in matching_ips or str(item_type).lower() != "computer":
+            continue
+        computer_id = row.get("21", row.get(21))
+        if not computer_id:
+            continue
+        items.append(computer_asset(computer_id, {"ip": matching_ips}))
+
+    if not items:
+        page_size = 100
+        start = 0
+        total = None
+        seen_computers = set()
+        while total is None or start < total:
+            end = start + page_size - 1
+            try:
+                addresses_response = requests.get(
+                    f"{glpi['url']}/IPAddress",
+                    headers={
+                        **glpi["headers"](token),
+                        "Range": f"items={start}-{end}",
+                    },
+                    params={"range": f"{start}-{end}"},
+                    timeout=30,
+                )
+                if addresses_response.status_code not in (200, 206):
+                    raise requests.HTTPError(
+                        f"GLPI IPAddress list returned HTTP {addresses_response.status_code}"
+                    )
+                addresses_payload = addresses_response.json()
+            except (requests.RequestException, ValueError) as e:
+                log.warning("GLPI IPAddress list gagal: %s", e)
+                search_errors.append(str(e))
+                break
+
+            addresses = (
+                addresses_payload if isinstance(addresses_payload, list)
+                else addresses_payload.get("data", [])
+                if isinstance(addresses_payload, dict) else []
+            )
+            if not isinstance(addresses, list) or not addresses:
+                break
+            content_range = addresses_response.headers.get("Content-Range", "")
+            total_match = re.search(r"/(\d+)$", content_range)
+            if total_match:
+                total = int(total_match.group(1))
+
+            for address in addresses:
+                if not isinstance(address, dict):
+                    continue
+                if ip not in set(_glpi_ip_values(address.get("name"))):
+                    continue
+                item_type = str(address.get("mainitemtype") or "").lower()
+                computer_id = address.get("mainitems_id")
+                if item_type != "computer" or not computer_id:
+                    continue
+                if str(computer_id) in seen_computers:
+                    continue
+                seen_computers.add(str(computer_id))
+                items.append(computer_asset(computer_id, {"ip": ip}))
+                log.info(
+                    "GLPI IPAddress cocok ip=%s address=%s computer=%s",
+                    ip, address.get("id"), computer_id,
+                )
+
+            start += page_size
+            if total is None and len(addresses) < page_size:
+                break
+
+    error = "; ".join(search_errors) or None
+    return {"found": bool(items), "items": items, "error": error}
 
 
 def _glpi_dropdown_name(value, endpoint, glpi, token):
