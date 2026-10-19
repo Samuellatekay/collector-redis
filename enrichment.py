@@ -281,7 +281,32 @@ def opencti_context(client, obs):
         is_collector_indicator = str(indicator.get("description") or "").startswith(
             COLLECTOR_MARK
         )
-        created_by = indicator.get("createdBy") or indicator.get("created_by")
+        created_by = (
+            indicator.get("createdBy")
+            or indicator.get("created_by")
+            or indicator.get("creator")
+        )
+        if not created_by and indicator.get("id"):
+            try:
+                result = client.query(
+                    """
+                    query CollectorIndicatorAuthor($id: String!) {
+                      indicator(id: $id) {
+                        createdBy {
+                          id
+                          name
+                        }
+                      }
+                    }
+                    """,
+                    {"id": indicator["id"]},
+                )
+                data = result.get("data") if isinstance(result, dict) else None
+                author_data = data.get("indicator") if isinstance(data, dict) else None
+                if isinstance(author_data, dict):
+                    created_by = author_data.get("createdBy")
+            except Exception:
+                log.exception("Author indicator OpenCTI gagal dibaca id=%s", indicator["id"])
         if isinstance(created_by, dict):
             created_by = {key: created_by[key] for key in ("id", "name")
                           if created_by.get(key)}
