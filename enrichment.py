@@ -112,6 +112,29 @@ def _opencti_labels(stix):
     ]
 
 
+def _normalize_author(value):
+    if isinstance(value, str):
+        name = value.strip()
+        return {"name": name} if name else None
+    if isinstance(value, list):
+        authors = []
+        for item in value:
+            normalized = _normalize_author(item)
+            if isinstance(normalized, list):
+                authors.extend(normalized)
+            elif normalized:
+                authors.append(normalized)
+        return authors or None
+    if not isinstance(value, dict):
+        return None
+    if value.get("name") or value.get("id"):
+        return {key: value[key] for key in ("id", "name") if value.get(key)}
+    for key in ("edges", "nodes", "items", "data"):
+        if key in value:
+            return _normalize_author(value[key])
+    return None
+
+
 CONNECTOR_INVENTORY_QUERY = """
 query CollectorConnectorInventory {
   connectors {
@@ -285,6 +308,7 @@ def opencti_context(client, obs):
             indicator.get("createdBy")
             or indicator.get("created_by")
             or indicator.get("creator")
+            or indicator.get("author")
         )
         if not created_by and indicator.get("id"):
             try:
@@ -307,9 +331,7 @@ def opencti_context(client, obs):
                     created_by = author_data.get("createdBy")
             except Exception:
                 log.exception("Author indicator OpenCTI gagal dibaca id=%s", indicator["id"])
-        if isinstance(created_by, dict):
-            created_by = {key: created_by[key] for key in ("id", "name")
-                          if created_by.get(key)}
+        created_by = _normalize_author(created_by)
         references = indicator.get("externalReferences") or indicator.get("external_references") or []
         references = [
             {key: ref[key] for key in ("source_name", "url", "external_id") if ref.get(key)}
