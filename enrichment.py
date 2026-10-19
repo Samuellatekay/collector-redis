@@ -606,7 +606,101 @@ def _glpi_records(payload):
     return []
 
 
+def _network_name_search_fields(glpi, token):
+    try:
+        options_response = requests.get(
+            f"{glpi['url']}/listSearchOptions/NetworkName",
+            headers=glpi["headers"](token),
+            timeout=30,
+        )
+        options_response.raise_for_status()
+        options = options_response.json()
+        item_type_fields = _glpi_search_fields(options, {"itemtype", "item type"})
+        item_id_fields = _glpi_search_fields(options, {"items_id", "item id"})
+        id_fields = _glpi_search_fields(options, {"id"})
+        if not item_type_fields or not item_id_fields or not id_fields:
+            log.warning("GLPI NetworkName search options omit ID, item type, or item ID")
+            return None
+        return item_type_fields[0], item_id_fields[0], id_fields[0]
+    except (requests.RequestException, ValueError) as exc:
+        log.warning("GLPI NetworkName search options gagal dibaca: %s", exc)
+        return None
+
+
+def _network_name_ids(item_type, item_id, glpi, token, search_fields):
+    if not search_fields:
+        return []
+    item_type_field, item_id_field, id_field = search_fields
+    try:
+        params = {
+            "range": "0-49",
+            "criteria[0][field]": item_id_field,
+            "criteria[0][searchtype]": "equals",
+            "criteria[0][value]": str(item_id),
+            "criteria[1][field]": item_type_field,
+            "criteria[1][searchtype]": "equals",
+            "criteria[1][value]": item_type,
+            "criteria[1][link]": "AND",
+            "forcedisplay[0]": id_field,
+            "forcedisplay[1]": item_id_field,
+            "forcedisplay[2]": item_type_field,
+        }
+        response = requests.get(
+            f"{glpi['url']}/search/NetworkName",
+            headers=glpi["headers"](token),
+            params=params,
+            timeout=30,
+        )
+        if response.status_code not in (200, 206):
+            raise requests.HTTPError(
+                f"GLPI NetworkName search returned HTTP {response.status_code}"
+            )
+        payload = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        log.warning(
+            "GLPI NetworkName lookup itemtype=%s id=%s gagal: %s",
+            item_type, item_id, exc,
+        )
+        return []
+
+    ids = set()
+    for row in _glpi_records(payload):
+        row_type = row.get(item_type_field, row.get(int(item_type_field)))
+        row_item_id = row.get(item_id_field, row.get(int(item_id_field)))
+        network_name_id = row.get(id_field, row.get(int(id_field))) or row.get("id")
+        if (
+            network_name_id
+            and str(row_type).casefold() == item_type.casefold()
+            and str(row_item_id) == str(item_id)
+        ):
+            ids.add(str(network_name_id))
+    return sorted(ids)
+
+
+def _network_name_ip_addresses(network_name_id, glpi, token):
+    try:
+        response = requests.get(
+            f"{glpi['url']}/NetworkName/{network_name_id}/IPAddress",
+            headers=glpi["headers"](token),
+            timeout=30,
+        )
+        response.raise_for_status()
+        ip_addresses = _glpi_records(response.json())
+    except (requests.RequestException, ValueError) as exc:
+        log.warning(
+            "IPAddress GLPI network name=%s gagal dibaca: %s",
+            network_name_id, exc,
+        )
+        return set()
+    return {
+        address
+        for item in ip_addresses
+        for address in _glpi_ip_values(item)
+    }
+
+
 def _computer_ip_addresses(computer_id, glpi, token):
+    addresses = set()
     try:
         response = requests.get(
             f"{glpi['url']}/Computer/{computer_id}/NetworkPort",
@@ -617,14 +711,22 @@ def _computer_ip_addresses(computer_id, glpi, token):
         ports = _glpi_records(response.json())
     except (requests.RequestException, ValueError) as exc:
         log.warning("NetworkPort aset GLPI id=%s gagal dibaca: %s", computer_id, exc)
-        return []
+        ports = []
 
-    addresses = set()
     requests_remaining = 20
+    network_name_search_fields = _network_name_search_fields(glpi, token)
+    network_name_ids = set(_network_name_ids(
+        "Computer", computer_id, glpi, token, network_name_search_fields
+    ))
     for port in ports[:10]:
         addresses.update(_glpi_ip_values(port))
         port_id = port.get("id") or port.get("networkports_id")
-        if not port_id or requests_remaining <= 0:
+        if not port_id:
+            continue
+        network_name_ids.update(_network_name_ids(
+            "NetworkPort", port_id, glpi, token, network_name_search_fields
+        ))
+        if requests_remaining <= 0:
             continue
         try:
             response = requests.get(
@@ -642,24 +744,14 @@ def _computer_ip_addresses(computer_id, glpi, token):
         for network_name in network_names[:5]:
             addresses.update(_glpi_ip_values(network_name))
             network_name_id = network_name.get("id") or network_name.get("networknames_id")
-            if not network_name_id or requests_remaining <= 0:
-                continue
-            try:
-                response = requests.get(
-                    f"{glpi['url']}/NetworkName/{network_name_id}/IPAddress",
-                    headers=glpi["headers"](token),
-                    timeout=30,
-                )
-                requests_remaining -= 1
-                response.raise_for_status()
-                ip_addresses = _glpi_records(response.json())
-                for ip_address in ip_addresses:
-                    addresses.update(_glpi_ip_values(ip_address))
-            except (requests.RequestException, ValueError) as exc:
-                log.warning(
-                    "IPAddress GLPI network name=%s gagal dibaca: %s",
-                    network_name_id, exc,
-                )
+            if network_name_id:
+                network_name_ids.add(str(network_name_id))
+
+    for network_name_id in sorted(network_name_ids):
+        if requests_remaining <= 0:
+            break
+        addresses.update(_network_name_ip_addresses(network_name_id, glpi, token))
+        requests_remaining -= 1
 
     return sorted(
         addresses,
