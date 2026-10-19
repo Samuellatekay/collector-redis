@@ -14,6 +14,7 @@ import json
 import time
 import logging
 import ipaddress
+import re
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -35,10 +36,10 @@ ASSET_ENABLED = os.getenv("ENRICH_ASSET", "true").lower() == "true"
 OBS_TYPES = ["IPv4-Addr", "IPv6-Addr", "Domain-Name", "StixFile"]
 HTTP_TIMEOUT = 20
 
-# Field pencarian GLPI untuk itemtype Computer (cek: GET /listSearchOptions/Computer)
+# Field pencarian dasar GLPI untuk itemtype Computer.
 GLPI_COMPUTER_FIELDS = {
     "2": "id", "1": "name", "3": "location", "4": "type",
-    "31": "status", "70": "user", "126": "ip",
+    "31": "status", "70": "user",
 }
 
 
@@ -523,21 +524,85 @@ def domain_age(domain, vt_attrs=None):
 
 
 # ------------------------------------------------------------------ Asset info (GLPI)
+def _glpi_ip_search_fields(options):
+    fields = set()
+
+    def visit(value, key=None):
+        if isinstance(value, dict):
+            option_id = value.get("id") or key
+            field_name = re.sub(r"[^a-z0-9]", "", str(value.get("field") or "").lower())
+            label = re.sub(r"[^a-z0-9]", "", str(value.get("name") or "").lower())
+            is_ip_field = (
+                field_name in {"ip", "ipaddress", "ipv4", "ipv6", "ipv4address", "ipv6address"}
+                or label in {"ip", "ipaddress", "ipv4", "ipv6", "ipv4address", "ipv6address"}
+            )
+            if is_ip_field and str(option_id).isdigit():
+                fields.add(str(option_id))
+            for child_key, child in value.items():
+                if isinstance(child, (dict, list)):
+                    visit(child, child_key)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    visit(options)
+    return sorted(fields, key=int)
+
+
+def _glpi_ip_values(value):
+    if isinstance(value, dict):
+        for key in ("ip", "address", "value", "name"):
+            if value.get(key) is not None:
+                yield from _glpi_ip_values(value[key])
+        return
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            yield from _glpi_ip_values(item)
+        return
+    if not isinstance(value, str):
+        return
+    candidates = re.findall(
+        r"(?<![0-9A-Fa-f:.])(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?"
+        r"|(?<![0-9A-Fa-f:])[0-9A-Fa-f:]*:[0-9A-Fa-f:]+(?:/\d{1,3})?",
+        value,
+    )
+    for candidate in candidates:
+        try:
+            yield str(ipaddress.ip_interface(candidate).ip if "/" in candidate
+                      else ipaddress.ip_address(candidate))
+        except ValueError:
+            continue
+
+
 def asset_info(ip, glpi, token):
     if not ASSET_ENABLED or token is None:
         return {"found": False, "items": [], "error": "GLPI asset lookup is disabled"}
-    params = {
-        "criteria[0][field]": 126,
-        "criteria[0][searchtype]": "contains",
-        "criteria[0][value]": ip,
-        "range": "0-9",
-    }
-    for n, fid in enumerate(GLPI_COMPUTER_FIELDS):
-        params[f"forcedisplay[{n}]"] = fid
     try:
+        options_response = requests.get(
+            f"{glpi['url']}/listSearchOptions/Computer",
+            headers=glpi["headers"](token),
+            timeout=30,
+        )
+        options_response.raise_for_status()
+        ip_fields = _glpi_ip_search_fields(options_response.json())
+        if not ip_fields:
+            raise ValueError("GLPI Computer search options do not expose an IP field")
+
+        params = {"range": "0-9"}
+        for index, field_id in enumerate(ip_fields):
+            params[f"criteria[{index}][field]"] = field_id
+            params[f"criteria[{index}][searchtype]"] = "contains"
+            params[f"criteria[{index}][value]"] = ip
+            if index:
+                params[f"criteria[{index}][link]"] = "OR"
+        display_fields = list(dict.fromkeys([*GLPI_COMPUTER_FIELDS, *ip_fields]))
+        for index, field_id in enumerate(display_fields):
+            params[f"forcedisplay[{index}]"] = field_id
         res = requests.get(f"{glpi['url']}/search/Computer",
                            headers=glpi["headers"](token), params=params, timeout=30)
-    except requests.RequestException as e:
+        res.raise_for_status()
+        response_data = res.json()
+    except (requests.RequestException, ValueError) as e:
         log.warning("GLPI asset search gagal: %s", e)
         return {"found": False, "items": [], "error": str(e)}
     if res.status_code not in (200, 206):
@@ -549,11 +614,21 @@ def asset_info(ip, glpi, token):
         }
 
     items = []
-    for row in res.json().get("data", []) or []:
-        item = {name: row.get(fid) for fid, name in GLPI_COMPUTER_FIELDS.items()}
-        ips = item.get("ip")
-        ips = ips if isinstance(ips, list) else [ips]
-        if ip in [str(x) for x in ips if x]:   # cocokkan IP persis
+    if not isinstance(response_data, dict):
+        return {"found": False, "items": [], "error": "GLPI search returned an invalid response"}
+    for row in response_data.get("data", []) or []:
+        if not isinstance(row, dict):
+            continue
+        item = {
+            name: row.get(fid, row.get(int(fid)))
+            for fid, name in GLPI_COMPUTER_FIELDS.items()
+        }
+        ips = [
+            row.get(field_id, row.get(int(field_id)))
+            for field_id in ip_fields
+        ]
+        item["ip"] = list(dict.fromkeys(_glpi_ip_values(ips)))
+        if ip in item["ip"]:
             item.update({
                 "serial_number": None,
                 "operating_system": None,

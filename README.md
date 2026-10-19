@@ -93,7 +93,7 @@ Collector memperkaya observable baru OpenCTI (IP, domain, dan file hash) dan men
 |---|---|
 | Reputation | skor+label OpenCTI, AbuseIPDB (ABUSEIPDB_KEY), VirusTotal (VT_API_KEY) |
 | Geolocation | ip-api.com (gratis) atau ipinfo.io (IPINFO_TOKEN) + relasi located-at OpenCTI |
-| Asset Info | GLPI Computer yang IP-nya cocok |
+| Asset Info | GLPI Computer yang IP-nya cocok; field IP ditemukan dari search options GLPI |
 | Domain Age | RDAP (gratis), fallback VirusTotal |
 | File hash | SHA-512, SHA-256, SHA-1, atau MD5 dari observable StixFile; reputasi file via VirusTotal |
 
