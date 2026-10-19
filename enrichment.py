@@ -36,13 +36,6 @@ ASSET_ENABLED = os.getenv("ENRICH_ASSET", "true").lower() == "true"
 OBS_TYPES = ["IPv4-Addr", "IPv6-Addr", "Domain-Name", "StixFile"]
 HTTP_TIMEOUT = 20
 
-# Field pencarian dasar GLPI untuk itemtype Computer.
-GLPI_COMPUTER_FIELDS = {
-    "2": "id", "1": "name", "3": "location", "4": "type",
-    "31": "status", "70": "user",
-}
-
-
 # ------------------------------------------------------------------ util
 def _get_json(url, headers=None, params=None):
     try:
@@ -579,14 +572,14 @@ def asset_info(ip, glpi, token):
         return {"found": False, "items": [], "error": "GLPI asset lookup is disabled"}
     try:
         options_response = requests.get(
-            f"{glpi['url']}/listSearchOptions/Computer",
+            f"{glpi['url']}/listSearchOptions/NetworkPort",
             headers=glpi["headers"](token),
             timeout=30,
         )
         options_response.raise_for_status()
         ip_fields = _glpi_ip_search_fields(options_response.json())
         if not ip_fields:
-            raise ValueError("GLPI Computer search options do not expose an IP field")
+            raise ValueError("GLPI NetworkPort search options do not expose an IP field")
 
         params = {"range": "0-9"}
         for index, field_id in enumerate(ip_fields):
@@ -595,10 +588,10 @@ def asset_info(ip, glpi, token):
             params[f"criteria[{index}][value]"] = ip
             if index:
                 params[f"criteria[{index}][link]"] = "OR"
-        display_fields = list(dict.fromkeys([*GLPI_COMPUTER_FIELDS, *ip_fields]))
+        display_fields = list(dict.fromkeys(["2", "20", "21", *ip_fields]))
         for index, field_id in enumerate(display_fields):
             params[f"forcedisplay[{index}]"] = field_id
-        res = requests.get(f"{glpi['url']}/search/Computer",
+        res = requests.get(f"{glpi['url']}/search/NetworkPort",
                            headers=glpi["headers"](token), params=params, timeout=30)
         res.raise_for_status()
         response_data = res.json()
@@ -619,94 +612,109 @@ def asset_info(ip, glpi, token):
     for row in response_data.get("data", []) or []:
         if not isinstance(row, dict):
             continue
-        item = {
-            name: row.get(fid, row.get(int(fid)))
-            for fid, name in GLPI_COMPUTER_FIELDS.items()
-        }
         ips = [
             row.get(field_id, row.get(int(field_id)))
             for field_id in ip_fields
         ]
-        item["ip"] = list(dict.fromkeys(_glpi_ip_values(ips)))
-        if ip in item["ip"]:
-            item.update({
-                "serial_number": None,
-                "operating_system": None,
-                "owner": item.get("user"),
-            })
-            computer_id = item.get("id")
-            if computer_id:
-                try:
-                    details = requests.get(
-                        f"{glpi['url']}/Computer/{computer_id}",
-                        headers=glpi["headers"](token),
-                        params={"expand_dropdowns": "true"},
-                        timeout=30,
-                    )
-                    details.raise_for_status()
-                    details = details.json()
-                    item["name"] = details.get("name") or item.get("name")
-                    item["serial_number"] = details.get("serial")
-                    item["status"] = details.get("states_id") or item.get("status")
-                    os_relation = requests.get(
-                        f"{glpi['url']}/Computer/{computer_id}/Item_OperatingSystem",
-                        headers=glpi["headers"](token),
-                        params={"expand_dropdowns": "true"},
-                        timeout=30,
-                    )
-                    os_relation.raise_for_status()
-                    relations = os_relation.json()
-                    if isinstance(relations, dict):
-                        relations = relations.get("data", [relations])
-                    if isinstance(relations, list) and relations:
-                        os_data = relations[0]
-                    else:
-                        os_data = {}
+        matching_ips = list(dict.fromkeys(_glpi_ip_values(ips)))
+        item_type = row.get("20", row.get(20))
+        if ip not in matching_ips or str(item_type).lower() != "computer":
+            continue
+        computer_id = row.get("21", row.get(21))
+        if not computer_id:
+            continue
+        item = {
+            "id": computer_id,
+            "ip": matching_ips,
+            "name": None,
+            "location": None,
+            "type": None,
+            "status": None,
+            "user": None,
+            "owner": None,
+            "serial_number": None,
+            "operating_system": None,
+        }
+        try:
+            details = requests.get(
+                f"{glpi['url']}/Computer/{computer_id}",
+                headers=glpi["headers"](token),
+                params={"expand_dropdowns": "true"},
+                timeout=30,
+            )
+            details.raise_for_status()
+            details = details.json()
+            item["name"] = details.get("name")
+            item["serial_number"] = details.get("serial")
+            item["status"] = details.get("states_id")
+            item["location"] = details.get("locations_id") or details.get("location")
+            item["type"] = details.get("computertypes_id") or details.get("type")
+            item["user"] = details.get("users_id") or details.get("user")
+            item["owner"] = item["user"]
+            try:
+                os_relation = requests.get(
+                    f"{glpi['url']}/Computer/{computer_id}/Item_OperatingSystem",
+                    headers=glpi["headers"](token),
+                    params={"expand_dropdowns": "true"},
+                    timeout=30,
+                )
+                os_relation.raise_for_status()
+                relations = os_relation.json()
+                if isinstance(relations, dict):
+                    relations = relations.get("data", [relations])
+                if isinstance(relations, list) and relations:
+                    os_data = relations[0]
+                else:
+                    os_data = {}
+                os_name = _glpi_dropdown_name(
+                    os_data.get("operatingsystems_id"),
+                    "OperatingSystem",
+                    glpi,
+                    token,
+                )
+                if not os_name:
                     os_name = _glpi_dropdown_name(
-                        os_data.get("operatingsystems_id"),
-                        "OperatingSystem",
-                        glpi,
-                        token,
+                        details.get("operatingsystems_id"), "OperatingSystem", glpi, token
+                    ) or details.get("os")
+                os_version = _glpi_dropdown_name(
+                    os_data.get("operatingsystemversions_id"),
+                    "OperatingSystemVersion",
+                    glpi,
+                    token,
+                ) or _glpi_dropdown_name(
+                    details.get("operatingsystemversions_id"),
+                    "OperatingSystemVersion",
+                    glpi,
+                    token,
+                ) or details.get("os_version")
+                item["operating_system"] = " ".join(
+                    str(value) for value in (os_name, os_version) if value
+                ) or None
+            except (requests.RequestException, ValueError) as e:
+                log.warning("OS aset GLPI id=%s gagal dibaca: %s", computer_id, e)
+            owner = details.get("users_id") or details.get("user")
+            if isinstance(owner, dict):
+                owner = owner.get("name") or owner.get("id")
+            if isinstance(owner, (int, str)) and str(owner).isdigit() and int(owner) > 0:
+                try:
+                    user_res = requests.get(
+                        f"{glpi['url']}/User/{owner}",
+                        headers=glpi["headers"](token),
+                        params={"expand_dropdowns": "true"},
+                        timeout=30,
                     )
-                    if not os_name:
-                        os_name = _glpi_dropdown_name(
-                            details.get("operatingsystems_id"), "OperatingSystem", glpi, token
-                        ) or details.get("os")
-                    os_version = _glpi_dropdown_name(
-                        os_data.get("operatingsystemversions_id"),
-                        "OperatingSystemVersion",
-                        glpi,
-                        token,
-                    ) or _glpi_dropdown_name(
-                        details.get("operatingsystemversions_id"),
-                        "OperatingSystemVersion",
-                        glpi,
-                        token,
-                    ) or details.get("os_version")
-                    item["operating_system"] = " ".join(
-                        str(value) for value in (os_name, os_version) if value
-                    ) or None
-                    owner = details.get("users_id") or details.get("user") or item.get("user")
-                    if isinstance(owner, dict):
-                        owner = owner.get("name") or owner.get("id")
-                    if isinstance(owner, (int, str)) and str(owner).isdigit() and int(owner) > 0:
-                        user_res = requests.get(
-                            f"{glpi['url']}/User/{owner}",
-                            headers=glpi["headers"](token),
-                            params={"expand_dropdowns": "true"},
-                            timeout=30,
-                        )
-                        user_res.raise_for_status()
-                        user = user_res.json()
-                        owner = " ".join(
-                            str(value) for value in (
-                                user.get("firstname"), user.get("realname")
-                            ) if value
-                        ) or user.get("name") or owner
-                    item["owner"] = owner
+                    user_res.raise_for_status()
+                    user = user_res.json()
+                    owner = " ".join(
+                        str(value) for value in (user.get("firstname"), user.get("realname"))
+                        if value
+                    ) or user.get("name") or owner
                 except (requests.RequestException, ValueError) as e:
-                    log.warning("Detail aset GLPI id=%s gagal: %s", computer_id, e)
-            items.append(item)
+                    log.warning("Pemilik aset GLPI user=%s gagal dibaca: %s", owner, e)
+            item["owner"] = owner
+        except (requests.RequestException, ValueError) as e:
+            log.warning("Detail aset GLPI id=%s gagal: %s", computer_id, e)
+        items.append(item)
     return {"found": bool(items), "items": items, "error": None}
 
 
