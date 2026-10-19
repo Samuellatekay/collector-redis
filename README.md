@@ -97,6 +97,10 @@ Collector memperkaya observable baru OpenCTI (IP, domain, dan file hash) dan men
 | Domain Age | RDAP (gratis), fallback VirusTotal |
 | File hash | SHA-512, SHA-256, SHA-1, atau MD5 dari observable StixFile; reputasi file via VirusTotal |
 
+Lookup rutin observable baru juga mengambil inventory connector, menjalankan Internal
+Enrichment yang aktif dan sesuai scope, lalu menyertakan seluruh status connector pada
+event enrichment—bukan hanya lookup yang diminta per-IP oleh aplikasi.
+
 Untuk setiap IP sumber/tujuan dari aplikasi analisis, aksi `lookup_enrichment` pada
 `outbound-opencti` memicu lookup connector. Daftar semua **Internal Enrichment** dan
 **External Import** yang terdeteksi, termasuk status aktif/scope dan hasil job enrichment,

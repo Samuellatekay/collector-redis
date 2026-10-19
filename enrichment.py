@@ -616,7 +616,7 @@ def _glpi_dropdown_name(value, endpoint, glpi, token):
 
 
 # ------------------------------------------------------------------ Orkestrasi
-def enrich_one(client, r, obs, glpi, token, include_asset=True):
+def enrich_one(client, r, obs, glpi, token, include_asset=True, connector_results=None):
     etype = obs["entity_type"]
     hash_info = file_hash(obs) if etype == "StixFile" else None
     value = hash_info["value"] if hash_info else obs.get("observable_value")
@@ -624,7 +624,17 @@ def enrich_one(client, r, obs, glpi, token, include_asset=True):
         log.info("StixFile %s dilewati: tidak memiliki hash MD5/SHA-1/SHA-256/SHA-512 valid",
                  obs.get("id", "-"))
         return None
+    if obs.get("id"):
+        try:
+            refreshed = client.stix_cyber_observable.read(id=obs["id"])
+            if isinstance(refreshed, dict):
+                obs = refreshed
+        except Exception:
+            log.exception("Observable OpenCTI gagal dibaca ulang setelah enrichment id=%s",
+                          obs["id"])
     ctx = opencti_context(client, obs)
+    if connector_results is not None:
+        ctx["connectors"] = connector_results
 
     cache_key = f"enrich:cache:{etype}:{value}"
     cached = r.get(cache_key)
@@ -746,11 +756,18 @@ def collect_enrichment(client, r, push, glpi, state_key="collector:state"):
         except Exception as e:
             log.warning("Sesi GLPI untuk asset info gagal: %s", e)
 
+    connectors, inventory_error = connector_inventory(client)
     done = 0
     try:
         for obs in items:
             try:
-                doc = enrich_one(client, r, obs, glpi, token)
+                connector_results = connector_lookup_status(
+                    client, r, obs, connectors, inventory_error
+                )
+                doc = enrich_one(
+                    client, r, obs, glpi, token,
+                    connector_results=connector_results,
+                )
                 if doc is not None:
                     push("enrichment-events", "enrichment", doc)
                     done += 1

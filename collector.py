@@ -360,11 +360,11 @@ def send_opencti(client, msg):
                               obs.get("id"))
 
         result = enrichment.enrich_one(
-            client, r, obs, GLPI, None, include_asset=False
+            client, r, obs, GLPI, None, include_asset=False,
+            connector_results=connector_results,
         )
         if result is None:
             raise RuntimeError(f"OpenCTI gagal membentuk hasil lookup untuk {ip}")
-        result["opencti"]["connectors"] = connector_results
         result["opencti"]["lookup_status"] = (
             "observable_found" if obs.get("id") else "observable_not_found"
         )
