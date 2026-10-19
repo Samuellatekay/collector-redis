@@ -93,7 +93,7 @@ Collector memperkaya observable baru OpenCTI (IP, domain, dan file hash) dan men
 |---|---|
 | Reputation | skor+label OpenCTI, AbuseIPDB (ABUSEIPDB_KEY), VirusTotal (VT_API_KEY) |
 | Geolocation | ip-api.com (gratis) atau ipinfo.io (IPINFO_TOKEN) + relasi located-at OpenCTI |
-| Asset Info | GLPI Computer yang IP-nya cocok melalui NetworkPort atau relasi IPAddress |
+| Asset Info | GLPI Computer yang IP-nya cocok melalui NetworkPort atau relasi IPAddress, termasuk detail inventaris terkait |
 | Domain Age | RDAP (gratis), fallback VirusTotal |
 | File hash | SHA-512, SHA-256, SHA-1, atau MD5 dari observable StixFile; reputasi file via VirusTotal |
 
@@ -129,8 +129,10 @@ dan ditautkan langsung ke Computer, lalu menambahkan Name, User/pemilik, serial 
 operating system, dan status ke isi tiket. Informasi aset dikelola di GLPI, bukan diambil
 dari inventaris Wazuh. Operating system dibaca dari relasi **Computer → Operating systems**
 di GLPI, termasuk nama OS dan versi jika tersedia. Alert file integrity dengan hash membuat indikator `StixFile` di
-OpenCTI; hash tidak dipakai untuk pencarian aset GLPI. Untuk event Wazuh tanpa IP sumber,
-collector juga dapat mencari Computer berdasarkan hostname yang cocok persis dan unik.
+OpenCTI; hash tidak dipakai untuk pencarian aset GLPI. Untuk setiap alert Wazuh,
+aplikasi juga dapat meminta pencarian Computer GLPI berdasarkan hostname agent yang
+cocok persis dan unik, sehingga aset sensor dapat ditampilkan terpisah dari IP
+sumber/penyerang.
 
 Event indikator OpenCTI di `opencti-events` menyertakan `score` dan `relations`.
 Relasi memuat relasi masuk maupun keluar, dengan tipe relasi dan ringkasan entitas

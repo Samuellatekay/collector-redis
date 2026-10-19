@@ -592,6 +592,82 @@ def _glpi_ip_values(value):
             continue
 
 
+def _glpi_records(payload):
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        for key in ("data", "items"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+            if isinstance(value, dict):
+                return [value]
+        return [payload]
+    return []
+
+
+def _computer_ip_addresses(computer_id, glpi, token):
+    try:
+        response = requests.get(
+            f"{glpi['url']}/Computer/{computer_id}/NetworkPort",
+            headers=glpi["headers"](token),
+            timeout=30,
+        )
+        response.raise_for_status()
+        ports = _glpi_records(response.json())
+    except (requests.RequestException, ValueError) as exc:
+        log.warning("NetworkPort aset GLPI id=%s gagal dibaca: %s", computer_id, exc)
+        return []
+
+    addresses = set()
+    requests_remaining = 20
+    for port in ports[:10]:
+        addresses.update(_glpi_ip_values(port))
+        port_id = port.get("id") or port.get("networkports_id")
+        if not port_id or requests_remaining <= 0:
+            continue
+        try:
+            response = requests.get(
+                f"{glpi['url']}/NetworkPort/{port_id}/NetworkName",
+                headers=glpi["headers"](token),
+                timeout=30,
+            )
+            requests_remaining -= 1
+            response.raise_for_status()
+            network_names = _glpi_records(response.json())
+        except (requests.RequestException, ValueError) as exc:
+            log.warning("NetworkName GLPI port=%s gagal dibaca: %s", port_id, exc)
+            continue
+
+        for network_name in network_names[:5]:
+            addresses.update(_glpi_ip_values(network_name))
+            network_name_id = network_name.get("id") or network_name.get("networknames_id")
+            if not network_name_id or requests_remaining <= 0:
+                continue
+            try:
+                response = requests.get(
+                    f"{glpi['url']}/NetworkName/{network_name_id}/IPAddress",
+                    headers=glpi["headers"](token),
+                    timeout=30,
+                )
+                requests_remaining -= 1
+                response.raise_for_status()
+                ip_addresses = _glpi_records(response.json())
+                for ip_address in ip_addresses:
+                    addresses.update(_glpi_ip_values(ip_address))
+            except (requests.RequestException, ValueError) as exc:
+                log.warning(
+                    "IPAddress GLPI network name=%s gagal dibaca: %s",
+                    network_name_id, exc,
+                )
+
+    return sorted(
+        addresses,
+        key=lambda value: (ipaddress.ip_address(value).version,
+                           int(ipaddress.ip_address(value))),
+    )[:32]
+
+
 def _glpi_search_fields(options, accepted_names):
     fields = set()
     accepted_names = {re.sub(r"[^a-z0-9]", "", name.lower()) for name in accepted_names}
@@ -667,9 +743,21 @@ def asset_info(ip, glpi, token):
             "status": base.get("status"),
             "user": base.get("user"),
             "ip": base.get("ip") or ip,
+            "ip_addresses": [],
             "serial_number": None,
+            "asset_tag": None,
             "operating_system": None,
             "owner": base.get("user"),
+            "manufacturer": None,
+            "model": None,
+            "entity": None,
+            "group": None,
+            "contact": None,
+            "contact_number": None,
+            "description": None,
+            "created_at": None,
+            "updated_at": None,
+            "purchase_date": None,
         }
         if not computer_id:
             return item
@@ -683,10 +771,43 @@ def asset_info(ip, glpi, token):
             details_res.raise_for_status()
             details = details_res.json()
             item["name"] = details.get("name") or item["name"]
+            base_ips = list(_glpi_ip_values(base.get("ip")))
+            item["ip_addresses"] = list(dict.fromkeys([
+                *base_ips, *_computer_ip_addresses(computer_id, glpi, token)
+            ]))[:32]
+            item["ip"] = (
+                ip if ip in item["ip_addresses"] or not item["ip_addresses"]
+                else item["ip_addresses"][0]
+            )
             item["serial_number"] = details.get("serial")
-            item["status"] = details.get("states_id") or item["status"]
-            item["location"] = details.get("locations_id") or details.get("location")
-            item["type"] = details.get("computertypes_id") or details.get("type")
+            item["asset_tag"] = details.get("otherserial")
+            item["status"] = _glpi_dropdown_name(
+                details.get("states_id"), "State", glpi, token
+            ) or item["status"]
+            item["location"] = _glpi_dropdown_name(
+                details.get("locations_id"), "Location", glpi, token
+            ) or details.get("location") or item["location"]
+            item["type"] = _glpi_dropdown_name(
+                details.get("computertypes_id"), "ComputerType", glpi, token
+            ) or details.get("type") or item["type"]
+            item["manufacturer"] = _glpi_dropdown_name(
+                details.get("manufacturers_id"), "Manufacturer", glpi, token
+            )
+            item["model"] = _glpi_dropdown_name(
+                details.get("computermodels_id"), "ComputerModel", glpi, token
+            )
+            item["entity"] = _glpi_dropdown_name(
+                details.get("entities_id"), "Entity", glpi, token
+            )
+            item["group"] = _glpi_dropdown_name(
+                details.get("groups_id"), "Group", glpi, token
+            )
+            item["contact"] = details.get("contact")
+            item["contact_number"] = details.get("contact_num")
+            item["description"] = details.get("comment")
+            item["created_at"] = details.get("date_creation")
+            item["updated_at"] = details.get("date_mod")
+            item["purchase_date"] = details.get("date_buy")
             item["user"] = details.get("users_id") or details.get("user") or item["user"]
             item["owner"] = item["user"]
             try:
@@ -905,13 +1026,25 @@ def asset_info_by_name(host_name, glpi, token):
         "id": computer_id,
         "name": name,
         "ip": None,
+        "ip_addresses": [],
         "location": None,
         "type": None,
         "status": None,
         "user": None,
         "owner": None,
         "serial_number": None,
+        "asset_tag": None,
         "operating_system": None,
+        "manufacturer": None,
+        "model": None,
+        "entity": None,
+        "group": None,
+        "contact": None,
+        "contact_number": None,
+        "description": None,
+        "created_at": None,
+        "updated_at": None,
+        "purchase_date": None,
     }
     try:
         details_response = requests.get(
@@ -923,14 +1056,37 @@ def asset_info_by_name(host_name, glpi, token):
         details_response.raise_for_status()
         details = details_response.json()
         item["name"] = details.get("name") or name
+        item["ip_addresses"] = _computer_ip_addresses(computer_id, glpi, token)
+        item["ip"] = item["ip_addresses"][0] if item["ip_addresses"] else None
         item["serial_number"] = details.get("serial")
-        item["status"] = details.get("states_id")
+        item["asset_tag"] = details.get("otherserial")
+        item["status"] = _glpi_dropdown_name(
+            details.get("states_id"), "State", glpi, token
+        )
         item["location"] = _glpi_dropdown_name(
             details.get("locations_id"), "Location", glpi, token
         )
         item["type"] = _glpi_dropdown_name(
             details.get("computertypes_id"), "ComputerType", glpi, token
         )
+        item["manufacturer"] = _glpi_dropdown_name(
+            details.get("manufacturers_id"), "Manufacturer", glpi, token
+        )
+        item["model"] = _glpi_dropdown_name(
+            details.get("computermodels_id"), "ComputerModel", glpi, token
+        )
+        item["entity"] = _glpi_dropdown_name(
+            details.get("entities_id"), "Entity", glpi, token
+        )
+        item["group"] = _glpi_dropdown_name(
+            details.get("groups_id"), "Group", glpi, token
+        )
+        item["contact"] = details.get("contact")
+        item["contact_number"] = details.get("contact_num")
+        item["description"] = details.get("comment")
+        item["created_at"] = details.get("date_creation")
+        item["updated_at"] = details.get("date_mod")
+        item["purchase_date"] = details.get("date_buy")
         owner = details.get("users_id") or details.get("user")
         if isinstance(owner, dict):
             owner = owner.get("name") or owner.get("id")
