@@ -289,6 +289,22 @@ def opencti_context(client, obs):
         "sources": [],
         "external_import_match_count": 0,
     }
+    if obs.get("id"):
+        ctx["observable"] = {
+            key: obs[key]
+            for key in (
+                "id", "entity_type", "observable_value", "hashes", "name",
+                "description", "created_at", "updated_at",
+            )
+            if obs.get(key) is not None
+        }
+        if isinstance(ctx["observable"].get("description"), str):
+            ctx["observable"]["description"] = ctx["observable"]["description"][:2000]
+        hash_info = file_hash(obs) if obs.get("entity_type") == "StixFile" else None
+        ctx["observable"]["value"] = (
+            hash_info["value"] if hash_info else obs.get("observable_value")
+        )
+        ctx["observable"]["labels"] = _opencti_labels(obs)
 
     def add_indicator(indicator):
         if not isinstance(indicator, dict):
@@ -328,14 +344,23 @@ def opencti_context(client, obs):
         created_by = _normalize_author(created_by)
         references = indicator.get("externalReferences") or indicator.get("external_references") or []
         references = [
-            {key: ref[key] for key in ("source_name", "url", "external_id") if ref.get(key)}
-            for ref in references if isinstance(ref, dict)
+            {key: ref[key] for key in ("source_name", "url", "external_id", "description")
+             if ref.get(key)}
+            for ref in references[:20] if isinstance(ref, dict)
         ] if isinstance(references, list) else []
         ctx["indicators"].append({
             "id": indicator.get("id"), "name": indicator.get("name"),
             "score": score, "labels": labels,
             "source": "collector" if is_collector_indicator else created_by or "opencti",
             "created_by": created_by, "external_references": references,
+            "pattern": str(indicator.get("pattern") or "")[:2000] or None,
+            "description": str(indicator.get("description") or "")[:2000] or None,
+            "confidence": indicator.get("confidence"),
+            "valid_from": indicator.get("valid_from"),
+            "valid_until": indicator.get("valid_until"),
+            "created": indicator.get("created"),
+            "modified": indicator.get("modified"),
+            "revoked": indicator.get("revoked"),
         })
         if created_by and not is_collector_indicator:
             ctx["sources"].append(created_by)
@@ -365,7 +390,7 @@ def opencti_context(client, obs):
             exact_values = (f"'{value}'", f'"{value}"')
             for indicator in candidates:
                 pattern = str(indicator.get("pattern") or "") if isinstance(indicator, dict) else ""
-                if any(exact in pattern for exact in exact_values):
+                if any(exact.casefold() in pattern.casefold() for exact in exact_values):
                     add_indicator(indicator)
         return ctx
 
@@ -565,6 +590,30 @@ def _glpi_ip_values(value):
                       else ipaddress.ip_address(candidate))
         except ValueError:
             continue
+
+
+def _glpi_search_fields(options, accepted_names):
+    fields = set()
+    accepted_names = {re.sub(r"[^a-z0-9]", "", name.lower()) for name in accepted_names}
+
+    def visit(value, key=None):
+        if isinstance(value, dict):
+            option_id = value.get("id") or key
+            field_name = re.sub(
+                r"[^a-z0-9]", "", str(value.get("field") or "").lower()
+            )
+            label = re.sub(r"[^a-z0-9]", "", str(value.get("name") or "").lower())
+            if (field_name in accepted_names or label in accepted_names) and str(option_id).isdigit():
+                fields.add(str(option_id))
+            for child_key, child in value.items():
+                if isinstance(child, (dict, list)):
+                    visit(child, child_key)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    visit(options)
+    return sorted(fields, key=int)
 
 
 def asset_info(ip, glpi, token):
@@ -786,6 +835,160 @@ def asset_info(ip, glpi, token):
 
     error = "; ".join(search_errors) or None
     return {"found": bool(items), "items": items, "error": error}
+
+
+def asset_info_by_name(host_name, glpi, token):
+    if not ASSET_ENABLED or token is None:
+        return {"found": False, "items": [], "error": "GLPI asset lookup is disabled"}
+    host_name = str(host_name or "").strip()
+    if not host_name:
+        return {"found": False, "items": [], "error": "hostname is empty"}
+
+    try:
+        options_response = requests.get(
+            f"{glpi['url']}/listSearchOptions/Computer",
+            headers=glpi["headers"](token),
+            timeout=30,
+        )
+        options_response.raise_for_status()
+        name_fields = _glpi_search_fields(options_response.json(), {"name", "computername"})
+        if not name_fields:
+            raise ValueError("GLPI Computer search options do not expose a name field")
+
+        params = {
+            "range": "0-49",
+            "criteria[0][field]": name_fields[0],
+            "criteria[0][searchtype]": "equals",
+            "criteria[0][value]": host_name,
+            "forcedisplay[0]": "2",
+            "forcedisplay[1]": name_fields[0],
+        }
+        response = requests.get(
+            f"{glpi['url']}/search/Computer",
+            headers=glpi["headers"](token),
+            params=params,
+            timeout=30,
+        )
+        if response.status_code not in (200, 206):
+            raise requests.HTTPError(
+                f"GLPI Computer search returned HTTP {response.status_code}"
+            )
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("GLPI Computer search returned an invalid response")
+    except (requests.RequestException, ValueError) as exc:
+        log.warning("GLPI hostname asset search gagal: %s", exc)
+        return {"found": False, "items": [], "error": str(exc)}
+
+    matching = []
+    for row in payload.get("data", []) or []:
+        if not isinstance(row, dict):
+            continue
+        name = row.get(name_fields[0], row.get(int(name_fields[0])))
+        computer_id = row.get("2", row.get(2)) or row.get("id")
+        if (computer_id and isinstance(name, str)
+                and name.strip().casefold() == host_name.casefold()):
+            matching.append((computer_id, name.strip()))
+
+    matching = list(dict.fromkeys(matching))
+    if not matching:
+        return {"found": False, "items": [], "error": None}
+    if len(matching) != 1:
+        return {
+            "found": False,
+            "items": [],
+            "error": f"GLPI hostname lookup is ambiguous ({len(matching)} exact matches)",
+        }
+
+    computer_id, name = matching[0]
+    item = {
+        "id": computer_id,
+        "name": name,
+        "ip": None,
+        "location": None,
+        "type": None,
+        "status": None,
+        "user": None,
+        "owner": None,
+        "serial_number": None,
+        "operating_system": None,
+    }
+    try:
+        details_response = requests.get(
+            f"{glpi['url']}/Computer/{computer_id}",
+            headers=glpi["headers"](token),
+            params={"expand_dropdowns": "true"},
+            timeout=30,
+        )
+        details_response.raise_for_status()
+        details = details_response.json()
+        item["name"] = details.get("name") or name
+        item["serial_number"] = details.get("serial")
+        item["status"] = details.get("states_id")
+        item["location"] = _glpi_dropdown_name(
+            details.get("locations_id"), "Location", glpi, token
+        )
+        item["type"] = _glpi_dropdown_name(
+            details.get("computertypes_id"), "ComputerType", glpi, token
+        )
+        owner = details.get("users_id") or details.get("user")
+        if isinstance(owner, dict):
+            owner = owner.get("name") or owner.get("id")
+        if isinstance(owner, (int, str)) and str(owner).isdigit() and int(owner) > 0:
+            try:
+                user_response = requests.get(
+                    f"{glpi['url']}/User/{owner}",
+                    headers=glpi["headers"](token),
+                    params={"expand_dropdowns": "true"},
+                    timeout=30,
+                )
+                user_response.raise_for_status()
+                user = user_response.json()
+                owner = " ".join(
+                    str(value) for value in (user.get("firstname"), user.get("realname"))
+                    if value
+                ) or user.get("name") or owner
+            except (requests.RequestException, ValueError) as exc:
+                log.warning("Pemilik aset GLPI user=%s gagal dibaca: %s", owner, exc)
+        item["user"] = owner
+        item["owner"] = owner
+        try:
+            os_response = requests.get(
+                f"{glpi['url']}/Computer/{computer_id}/Item_OperatingSystem",
+                headers=glpi["headers"](token),
+                params={"expand_dropdowns": "true"},
+                timeout=30,
+            )
+            os_response.raise_for_status()
+            os_relations = os_response.json()
+            if isinstance(os_relations, dict):
+                os_relations = os_relations.get("data", [os_relations])
+            os_data = os_relations[0] if isinstance(os_relations, list) and os_relations else {}
+            os_name = _glpi_dropdown_name(
+                os_data.get("operatingsystems_id"), "OperatingSystem", glpi, token
+            ) or _glpi_dropdown_name(
+                details.get("operatingsystems_id"), "OperatingSystem", glpi, token
+            ) or details.get("os")
+            os_version = _glpi_dropdown_name(
+                os_data.get("operatingsystemversions_id"),
+                "OperatingSystemVersion",
+                glpi,
+                token,
+            ) or _glpi_dropdown_name(
+                details.get("operatingsystemversions_id"),
+                "OperatingSystemVersion",
+                glpi,
+                token,
+            ) or details.get("os_version")
+            item["operating_system"] = " ".join(
+                str(value) for value in (os_name, os_version) if value
+            ) or None
+        except (requests.RequestException, ValueError) as exc:
+            log.warning("OS aset GLPI id=%s gagal dibaca: %s", computer_id, exc)
+    except (requests.RequestException, ValueError) as exc:
+        log.warning("Detail aset GLPI id=%s gagal: %s", computer_id, exc)
+
+    return {"found": True, "items": [item], "error": None}
 
 
 def _glpi_dropdown_name(value, endpoint, glpi, token):

@@ -101,8 +101,9 @@ Lookup rutin observable baru juga mengambil inventory connector, menjalankan Int
 Enrichment yang aktif dan sesuai scope, lalu menyertakan seluruh status connector pada
 event enrichment—bukan hanya lookup yang diminta per-IP oleh aplikasi.
 
-Untuk setiap IP sumber/tujuan dari aplikasi analisis, aksi `lookup_enrichment` pada
-`outbound-opencti` memicu lookup connector. Daftar semua **Internal Enrichment** dan
+Untuk setiap IP sumber/tujuan, domain, dan hash file dari aplikasi analisis, aksi
+`lookup_enrichment` pada `outbound-opencti` memicu pencarian observable/indicator yang
+cocok serta lookup connector. Daftar semua **Internal Enrichment** dan
 **External Import** yang terdeteksi, termasuk status aktif/scope dan hasil job enrichment,
 dikirim di `enrichment-events` untuk ditampilkan IRIS. Inventory dibaca dari GraphQL
 `connectors`; SDK `connector.list()` hanya memberi konfigurasi worker tanpa tipe connector.
@@ -128,7 +129,8 @@ dan ditautkan langsung ke Computer, lalu menambahkan Name, User/pemilik, serial 
 operating system, dan status ke isi tiket. Informasi aset dikelola di GLPI, bukan diambil
 dari inventaris Wazuh. Operating system dibaca dari relasi **Computer → Operating systems**
 di GLPI, termasuk nama OS dan versi jika tersedia. Alert file integrity dengan hash membuat indikator `StixFile` di
-OpenCTI; hash tidak dipakai untuk pencarian aset GLPI.
+OpenCTI; hash tidak dipakai untuk pencarian aset GLPI. Untuk event Wazuh tanpa IP sumber,
+collector juga dapat mencari Computer berdasarkan hostname yang cocok persis dan unik.
 
 Event indikator OpenCTI di `opencti-events` menyertakan `score` dan `relations`.
 Relasi memuat relasi masuk maupun keluar, dengan tipe relasi dan ringkasan entitas

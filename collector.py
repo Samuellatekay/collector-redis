@@ -327,24 +327,92 @@ def _create_observables(pattern):
 def send_opencti(client, msg):
     action = msg.get("action")
     if action == "lookup_enrichment":
-        ip = alert_ip(msg)
-        if not ip:
-            raise ValueError("lookup_enrichment membutuhkan IP yang valid")
-        address = ipaddress.ip_address(ip)
-        entity_type = "IPv4-Addr" if address.version == 4 else "IPv6-Addr"
-        filters = {
-            "mode": "and",
-            "filters": [{"key": "observable_value", "values": [ip], "operator": "eq"}],
-            "filterGroups": [],
-        }
-        observables = client.stix_cyber_observable.list(
-            types=[entity_type], filters=filters, first=100
-        ) or []
-        obs = next((item for item in observables
-                    if item.get("observable_value") == ip), None)
+        entity_type = str(msg.get("entity_type") or "").strip()
+        value = str(msg.get("value") or msg.get("ip") or "").strip()
+        hash_info = None
+        if entity_type.lower() in {"ipv4-addr", "ipv6-addr"} or not entity_type:
+            try:
+                address = ipaddress.ip_address(value)
+            except ValueError as exc:
+                raise ValueError("lookup_enrichment membutuhkan IOC IP/hash/domain yang valid") from exc
+            entity_type = "IPv4-Addr" if address.version == 4 else "IPv6-Addr"
+            value = str(address)
+        elif entity_type.lower() == "domain-name":
+            entity_type = "Domain-Name"
+            value = value.rstrip(".").casefold()
+            if (
+                not value
+                or len(value) > 253
+                or any(char.isspace() or char in "/:@?#" for char in value)
+            ):
+                raise ValueError("lookup_enrichment membutuhkan domain yang valid")
+            try:
+                ipaddress.ip_address(value)
+            except ValueError:
+                pass
+            else:
+                raise ValueError("lookup_enrichment membutuhkan domain, bukan IP")
+        elif entity_type.lower() == "stixfile":
+            entity_type = "StixFile"
+            value = value.lower()
+            algorithm_by_length = {
+                32: "MD5", 40: "SHA-1", 64: "SHA-256", 128: "SHA-512",
+            }
+            algorithm = algorithm_by_length.get(len(value))
+            if not algorithm or any(char not in "0123456789abcdef" for char in value):
+                raise ValueError("lookup_enrichment membutuhkan hash MD5/SHA-1/SHA-256/SHA-512")
+            hash_info = {"algorithm": algorithm, "value": value}
+        else:
+            raise ValueError(f"Tipe IOC lookup_enrichment tidak didukung: {entity_type}")
+
+        if entity_type == "StixFile":
+            candidates = client.stix_cyber_observable.list(
+                types=[entity_type], search=value, first=100
+            ) or []
+            obs = next(
+                (
+                    item for item in candidates
+                    if isinstance(item, dict)
+                    and (enrichment.file_hash(item) or {}).get("value") == value
+                ),
+                None,
+            )
+        else:
+            filters = {
+                "mode": "and",
+                "filters": [{"key": "observable_value", "values": [value], "operator": "eq"}],
+                "filterGroups": [],
+            }
+            observables = client.stix_cyber_observable.list(
+                types=[entity_type], filters=filters, first=100
+            ) or []
+            obs = next(
+                (
+                    item for item in observables
+                    if isinstance(item, dict)
+                    and str(item.get("observable_value") or "").casefold() == value.casefold()
+                ),
+                None,
+            )
+            if obs is None and entity_type == "Domain-Name":
+                candidates = client.stix_cyber_observable.list(
+                    types=[entity_type], search=value, first=100
+                ) or []
+                obs = next(
+                    (
+                        item for item in candidates
+                        if isinstance(item, dict)
+                        and str(item.get("observable_value") or "").rstrip(".").casefold()
+                        == value
+                    ),
+                    None,
+                )
         if obs is None:
-            log.info("Observable %s belum ada di OpenCTI; pencarian feed tetap dilakukan", ip)
-            obs = {"entity_type": entity_type, "observable_value": ip}
+            log.info("Observable %s %s belum ada di OpenCTI; pencarian indicator tetap dilakukan",
+                     entity_type, value)
+            obs = {"entity_type": entity_type, "observable_value": value}
+            if hash_info:
+                obs["hashes"] = {hash_info["algorithm"]: value}
 
         connectors, inventory_error = enrichment.connector_inventory(client)
         connector_results = enrichment.connector_lookup_status(
@@ -364,15 +432,16 @@ def send_opencti(client, msg):
             connector_results=connector_results,
         )
         if result is None:
-            raise RuntimeError(f"OpenCTI gagal membentuk hasil lookup untuk {ip}")
+            raise RuntimeError(f"OpenCTI gagal membentuk hasil lookup untuk {entity_type} {value}")
         result["opencti"]["lookup_status"] = (
             "observable_found" if obs.get("id") else "observable_not_found"
         )
         push("enrichment-events", "enrichment", result)
-        log.info("Lookup OpenCTI selesai ip=%s connectors=%d",
-                 ip, len(connector_results))
+        log.info("Lookup OpenCTI selesai type=%s value=%s connectors=%d",
+                 entity_type, value, len(connector_results))
         return {
-            "ip": ip,
+            "entity_type": entity_type,
+            "value": value,
             "observable_found": bool(obs.get("id")),
             "connector_results": connector_results,
         }
@@ -416,6 +485,21 @@ def send_glpi(msg):
             result = {"ip": ip, "found": asset.get("found", False)}
             log.info("GLPI asset lookup dikirim ke enrichment-events ip=%s found=%s",
                      ip, asset.get("found"))
+        elif action == "lookup_asset_by_name":
+            host_name = str(msg.get("host_name") or "").strip()
+            if not host_name:
+                raise ValueError("lookup_asset_by_name membutuhkan nama host")
+            asset = enrichment.asset_info_by_name(host_name, GLPI, token)
+            push("enrichment-events", "enrichment", {
+                "id": f"glpi-asset-host:{host_name.casefold()}",
+                "type": "alert_enrichment",
+                "entity_type": "Host-Name",
+                "value": host_name,
+                "asset": asset,
+            })
+            result = {"host_name": host_name, "found": asset.get("found", False)}
+            log.info("GLPI hostname lookup dikirim ke enrichment-events host=%s found=%s",
+                     host_name, asset.get("found"))
         elif action == "create_ticket":
             content = msg.get("content") or ""
             if not isinstance(content, str):
