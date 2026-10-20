@@ -114,20 +114,12 @@ tetapi match tidak dapat dikaitkan ke feed tertentu jika metadata sumbernya tida
 Feed harus berhasil sinkronisasi dan token OpenCTI collector harus diizinkan melihat
 inventory serta meminta enrichment.
 
-Batas tunggu job Internal Enrichment default 45 detik dan cache status connector default
-1 detik agar lookup IOC dari alert berikutnya dapat meminta status/enrichment terbaru.
+Batas tunggu job Internal Enrichment default 45 detik dan cache status connector 24 jam.
 Nilainya dapat diubah dengan `ENRICH_CONNECTOR_WAIT_SECONDS` dan
-`ENRICH_CONNECTOR_CACHE_TTL` di `.env`. Data reputasi dari layanan eksternal tetap
-memakai cache `ENRICH_CACHE_TTL` (default 24 jam) untuk menghindari batas permintaan
-provider; cache eksternal ini tidak menahan pembacaan ulang data indicator/observable
-OpenCTI.
+`ENRICH_CONNECTOR_CACHE_TTL` di `.env`.
 
 Skor dan label OpenCTI diambil dari Indicator yang memiliki relasi `based-on` ke observable,
-termasuk relasi Indicator yang dikembalikan langsung pada Observable, karena atribut
-tersebut tersimpan pada Indicator, bukan selalu pada objek IP/domain/hash.
-Jika relasi `based-on` tidak menghasilkan Indicator, collector juga mencari pattern
-Indicator yang memuat nilai IOC persis. IRIS tetap menampilkan observable yang ditemukan
-meskipun belum ada Indicator terkait dan menjelaskan bila IOC tidak ditemukan.
+karena atribut tersebut tersimpan pada Indicator, bukan selalu pada objek IP/domain/hash.
 Skor Indicator buatan collector sendiri dikecualikan dari reputasi agar severity Wazuh tidak
 disalahartikan sebagai verdict intelijen eksternal.
 
