@@ -470,17 +470,43 @@ def opencti_context(client, obs):
     def add_indicators_by_value(value):
         if not value:
             return
-        try:
-            candidates = client.indicator.list(search=value, first=100) or []
-        except Exception:
-            log.exception("Pencarian indicator OpenCTI berdasarkan IOC gagal value=%s", value)
-            return
+        candidates = {}
+        pattern_filters = {
+            "mode": "and",
+            "filters": [{
+                "key": "pattern",
+                "values": [str(value)],
+                "operator": "contains",
+            }],
+            "filterGroups": [],
+        }
+        for search_args in (
+            {"search": str(value), "first": 100},
+            {"filters": pattern_filters, "first": 100},
+        ):
+            try:
+                results = client.indicator.list(**search_args) or []
+            except Exception:
+                log.exception(
+                    "Pencarian indicator OpenCTI berdasarkan IOC gagal "
+                    "value=%s query=%s",
+                    value,
+                    "pattern" if "filters" in search_args else "search",
+                )
+                continue
+            for indicator in results:
+                if isinstance(indicator, dict):
+                    identity = indicator.get("id") or (
+                        indicator.get("name"), indicator.get("pattern")
+                    )
+                    candidates.setdefault(identity, indicator)
+
         exact_pattern = re.compile(
             rf"""=\s*(?:'{re.escape(str(value))}'|"{re.escape(str(value))}")(?=\s|\]|\)|$)""",
             re.IGNORECASE,
         )
-        for indicator in candidates:
-            pattern = str(indicator.get("pattern") or "") if isinstance(indicator, dict) else ""
+        for indicator in candidates.values():
+            pattern = str(indicator.get("pattern") or "")
             if exact_pattern.search(pattern):
                 add_indicator(indicator)
 
