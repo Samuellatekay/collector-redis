@@ -129,6 +129,70 @@ def _normalize_author(value):
     return None
 
 
+def _opencti_entity_summary(entity):
+    if not isinstance(entity, dict):
+        return None
+    summary = {}
+    for key in (
+        "id", "entity_type", "name", "value", "observable_value", "type",
+        "pattern_type", "confidence", "revoked", "valid_from", "valid_until",
+        "created", "modified", "created_at", "updated_at", "first_seen",
+        "last_seen", "start_time", "stop_time", "x_mitre_id",
+        "attribute_count", "negative", "x_opencti_negative",
+    ):
+        value = entity.get(key)
+        if isinstance(value, (str, int, float, bool)) and value != "":
+            summary[key] = value
+    description = entity.get("description")
+    if isinstance(description, str) and description:
+        summary["description"] = description[:1200]
+    pattern = entity.get("pattern")
+    if isinstance(pattern, str) and pattern:
+        summary["pattern"] = pattern[:1200]
+    score = _opencti_score(entity)
+    if score is not None:
+        summary["score"] = score
+    labels = _opencti_labels(entity)
+    if labels:
+        summary["labels"] = labels[:30]
+    for key in (
+        "aliases", "alias", "x_mitre_aliases", "kill_chain_phases",
+        "event_types",
+    ):
+        value = entity.get(key)
+        if isinstance(value, list):
+            summary[key] = [
+                item if isinstance(item, (str, int, float, bool)) else
+                {name: item[name] for name in ("kill_chain_name", "phase_name")
+                 if item.get(name)}
+                for item in value[:30]
+                if isinstance(item, (str, int, float, bool, dict))
+            ]
+    references = entity.get("externalReferences") or entity.get("external_references")
+    if isinstance(references, list):
+        summary["external_references"] = [
+            {key: reference[key][:500] if isinstance(reference.get(key), str)
+             else reference[key]
+             for key in ("source_name", "external_id", "url", "description")
+             if reference.get(key)}
+            for reference in references[:10]
+            if isinstance(reference, dict)
+        ]
+    created_by = _normalize_author(
+        entity.get("createdBy") or entity.get("created_by")
+    )
+    if created_by:
+        summary["created_by"] = created_by
+    hashes = entity.get("hashes")
+    if isinstance(hashes, dict):
+        summary["hashes"] = {
+            str(key): str(value)[:256]
+            for key, value in list(hashes.items())[:20]
+            if value is not None
+        }
+    return summary or None
+
+
 CONNECTOR_INVENTORY_QUERY = """
 query CollectorConnectorInventory {
   connectors {
@@ -285,6 +349,9 @@ def opencti_context(client, obs):
         "score": _opencti_score(obs),
         "labels": _opencti_labels(obs),
         "indicators": [],
+        "related_entities": [],
+        "relationships": [],
+        "sightings": [],
         "locations": [],
         "sources": [],
         "external_import_match_count": 0,
@@ -294,7 +361,8 @@ def opencti_context(client, obs):
             key: obs[key]
             for key in (
                 "id", "entity_type", "observable_value", "hashes", "name",
-                "description", "created_at", "updated_at",
+                "description", "created_at", "updated_at", "first_seen",
+                "last_seen", "confidence", "revoked",
             )
             if obs.get(key) is not None
         }
@@ -305,18 +373,28 @@ def opencti_context(client, obs):
             hash_info["value"] if hash_info else obs.get("observable_value")
         )
         ctx["observable"]["labels"] = _opencti_labels(obs)
+        observable_author = _normalize_author(
+            obs.get("createdBy") or obs.get("created_by")
+        )
+        if observable_author:
+            ctx["observable"]["created_by"] = observable_author
+        observable_score = _opencti_score(obs)
+        if observable_score is not None:
+            ctx["observable"]["score"] = observable_score
 
     seen_indicators = set()
+    indicator_records = []
 
     def add_indicator(indicator):
         if not isinstance(indicator, dict):
-            return
+            return False
         identity = indicator.get("id") or (
             indicator.get("name"), indicator.get("pattern")
         )
         if identity in seen_indicators:
-            return
+            return False
         seen_indicators.add(identity)
+        indicator_records.append(indicator)
         score = _opencti_score(indicator)
         labels = _opencti_labels(indicator)
         is_collector_indicator = str(indicator.get("description") or "").startswith(
@@ -363,12 +441,17 @@ def opencti_context(client, obs):
             "created_by": created_by, "external_references": references,
             "pattern": str(indicator.get("pattern") or "")[:2000] or None,
             "description": str(indicator.get("description") or "")[:2000] or None,
+            "indicator_types": indicator.get("indicator_types") or [],
+            "x_mitre_id": indicator.get("x_mitre_id"),
             "confidence": indicator.get("confidence"),
             "valid_from": indicator.get("valid_from"),
             "valid_until": indicator.get("valid_until"),
             "created": indicator.get("created"),
             "modified": indicator.get("modified"),
+            "first_seen": indicator.get("first_seen"),
+            "last_seen": indicator.get("last_seen"),
             "revoked": indicator.get("revoked"),
+            "kill_chain_phases": indicator.get("kill_chain_phases") or [],
         })
         if created_by and not is_collector_indicator:
             ctx["sources"].append(created_by)
@@ -385,6 +468,7 @@ def opencti_context(client, obs):
                 if ctx["score"] is None:
                     ctx["score"] = score
         ctx["labels"] = list(dict.fromkeys([*ctx["labels"], *labels]))
+        return True
 
     def add_indicators_by_value(value):
         if not value:
@@ -409,37 +493,37 @@ def opencti_context(client, obs):
         observable_value = (file_hash(obs) or {}).get("value")
     if not observable_id:
         add_indicators_by_value(observable_value)
-        return ctx
-
-    try:
-        rels = client.stix_core_relationship.list(
-            fromId=observable_id, relationship_type="located-at", first=10)
-        for rel in rels or []:
-            to = rel.get("to") or {}
-            ctx["locations"].append({
-                "type": to.get("entity_type"),
-                "name": to.get("name"),
-                "latitude": to.get("latitude"),
-                "longitude": to.get("longitude"),
-            })
-    except Exception as exc:
-        log.debug("Relasi located-at gagal dibaca: %s", exc)
+    else:
+        try:
+            rels = client.stix_core_relationship.list(
+                fromId=observable_id, relationship_type="located-at", first=10)
+            for rel in rels or []:
+                to = rel.get("to") or {}
+                ctx["locations"].append({
+                    "type": to.get("entity_type"),
+                    "name": to.get("name"),
+                    "latitude": to.get("latitude"),
+                    "longitude": to.get("longitude"),
+                })
+        except Exception as exc:
+            log.debug("Relasi located-at gagal dibaca: %s", exc)
 
     indicator_ids = set()
-    for direction in ("fromId", "toId"):
-        try:
-            relations = client.stix_core_relationship.list(
-                **{direction: observable_id}, relationship_type="based-on", first=100
-            )
-        except Exception as exc:
-            log.debug("Relasi indicator based-on gagal dibaca (%s): %s", direction, exc)
-            continue
-        for relation in relations or []:
-            for endpoint in (relation.get("from"), relation.get("to")):
-                if (isinstance(endpoint, dict)
-                        and str(endpoint.get("entity_type") or "").lower() == "indicator"
-                        and endpoint.get("id")):
-                    indicator_ids.add(str(endpoint["id"]))
+    if observable_id:
+        for direction in ("fromId", "toId"):
+            try:
+                relations = client.stix_core_relationship.list(
+                    **{direction: observable_id}, relationship_type="based-on", first=100
+                )
+            except Exception as exc:
+                log.debug("Relasi indicator based-on gagal dibaca (%s): %s", direction, exc)
+                continue
+            for relation in relations or []:
+                for endpoint in (relation.get("from"), relation.get("to")):
+                    if (isinstance(endpoint, dict)
+                            and str(endpoint.get("entity_type") or "").lower() == "indicator"
+                            and endpoint.get("id")):
+                        indicator_ids.add(str(endpoint["id"]))
     for indicator_id in sorted(indicator_ids):
         try:
             add_indicator(client.indicator.read(id=indicator_id))
@@ -447,6 +531,132 @@ def opencti_context(client, obs):
             log.debug("Indicator OpenCTI %s gagal dibaca: %s", indicator_id, exc)
     if not ctx["indicators"]:
         add_indicators_by_value(observable_value)
+
+    related_entities = {}
+    relationships = {}
+    source_ids = []
+    if observable_id:
+        source_ids.append(str(observable_id))
+    source_ids.extend(
+        str(indicator["id"])
+        for indicator in indicator_records
+        if indicator.get("id")
+    )
+    source_ids = list(dict.fromkeys(source_ids))
+    related_data_truncated = len(source_ids) > 21
+    source_ids = source_ids[:21]
+    sightings = {}
+    sighting_api = getattr(client, "stix_sighting_relationship", None)
+    if source_ids and sighting_api is None:
+        log.warning("SDK OpenCTI tidak menyediakan API stix_sighting_relationship")
+    for source_id in source_ids:
+        for direction in ("fromId", "toId"):
+            try:
+                related = client.stix_core_relationship.list(
+                    **{direction: source_id}, first=100
+                ) or []
+            except Exception as exc:
+                log.debug(
+                    "Relasi OpenCTI entity=%s direction=%s gagal dibaca: %s",
+                    source_id, direction, exc,
+                )
+                continue
+            if len(related) >= 100:
+                related_data_truncated = True
+            for relation in related:
+                if not isinstance(relation, dict):
+                    continue
+                endpoints = {
+                    name: _opencti_entity_summary(relation.get(name))
+                    for name in ("from", "to")
+                }
+                relation_type = relation.get("relationship_type")
+                endpoint_ids = tuple(
+                    (endpoints[name] or {}).get("id") for name in ("from", "to")
+                )
+                identity = relation.get("id") or (
+                    relation_type, endpoint_ids,
+                )
+                if identity not in relationships:
+                    relationship = {
+                        "relationship_type": relation_type,
+                        "from": endpoints["from"],
+                        "to": endpoints["to"],
+                    }
+                    for key in ("description", "start_time", "stop_time", "created"):
+                        value = relation.get(key)
+                        if isinstance(value, str) and value:
+                            relationship[key] = value[:1000]
+                    relationships[identity] = relationship
+
+                for name in ("from", "to"):
+                    entity = endpoints[name]
+                    if not entity:
+                        continue
+                    entity_id = entity.get("id")
+                    entity_type = str(entity.get("entity_type") or "").casefold()
+                    if (
+                        not entity_id
+                        or str(entity_id) == source_id
+                        or entity_type in {"indicator", "stix-core-relationship"}
+                        or entity_id == observable_id
+                    ):
+                        continue
+                    related_entities.setdefault(str(entity_id), entity)
+
+        if sighting_api is None:
+            continue
+        for direction in ("fromId", "toId"):
+            try:
+                related = sighting_api.list(
+                    **{direction: source_id}, first=100
+                ) or []
+            except Exception as exc:
+                log.debug(
+                    "Sighting OpenCTI entity=%s direction=%s gagal dibaca: %s",
+                    source_id, direction, exc,
+                )
+                continue
+            if len(related) >= 100:
+                related_data_truncated = True
+            for sighting in related:
+                if not isinstance(sighting, dict):
+                    continue
+                identifier = sighting.get("id")
+                identity = identifier or (
+                    sighting.get("fromId"),
+                    sighting.get("toId"),
+                    sighting.get("first_seen"),
+                    sighting.get("last_seen"),
+                )
+                if identity in sightings:
+                    continue
+                summary = {
+                    "id": identifier,
+                    "from": _opencti_entity_summary(sighting.get("from")),
+                    "to": _opencti_entity_summary(sighting.get("to")),
+                }
+                for key in (
+                    "description", "first_seen", "last_seen", "attribute_count",
+                    "negative", "x_opencti_negative", "created", "modified",
+                ):
+                    value = sighting.get(key)
+                    if isinstance(value, (str, int, float, bool)) and value != "":
+                        summary[key] = value
+                sightings[identity] = summary
+
+    if len(relationships) > 100 or len(related_entities) > 50:
+        related_data_truncated = True
+    ctx["relationships"] = list(relationships.values())[:100]
+    ctx["related_entities"] = list(related_entities.values())[:50]
+    if len(sightings) > 50:
+        related_data_truncated = True
+    ctx["sightings"] = list(sightings.values())[:50]
+    ctx["indicator_match_count"] = len(seen_indicators)
+    ctx["related_entity_count"] = len(related_entities)
+    ctx["relationship_count"] = len(relationships)
+    ctx["sighting_count"] = len(sightings)
+    ctx["related_data_truncated"] = related_data_truncated
     return ctx
 
 
