@@ -492,9 +492,9 @@ def opencti_context(client, obs):
             }],
         }
         for search_args in (
-            {"search": str(value), "first": 100},
-            {"filters": pattern_filters, "first": 100},
-            {"filters": pattern_search_filters, "first": 100},
+            {"search": str(value), "first": 100, "getAll": True},
+            {"filters": pattern_filters, "first": 100, "getAll": True},
+            {"filters": pattern_search_filters, "first": 100, "getAll": True},
         ):
             try:
                 results = client.indicator.list(**search_args) or []
@@ -526,8 +526,14 @@ def opencti_context(client, obs):
                 add_indicator(indicator)
                 matched_count += 1
         log.info(
-            "OpenCTI indicator lookup value=%s candidates=%d exact_matches=%d",
+            "OpenCTI indicator lookup value=%s candidates=%d exact_matches=%d ids=%s",
             value, len(candidates), matched_count,
+            [
+                indicator.get("id")
+                for indicator in candidates.values()
+                if isinstance(indicator, dict)
+                and exact_pattern.search(str(indicator.get("pattern") or ""))
+            ][:20],
         )
 
     observable_id = obs.get("id")
