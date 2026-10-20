@@ -699,6 +699,38 @@ def _network_name_ip_addresses(network_name_id, glpi, token):
     }
 
 
+def _classify_ip_addresses(addresses):
+    private_networks = (
+        ipaddress.ip_network("10.0.0.0/8"),
+        ipaddress.ip_network("172.16.0.0/12"),
+        ipaddress.ip_network("192.168.0.0/16"),
+        ipaddress.ip_network("fc00::/7"),
+    )
+    classified = {
+        "private_ip_addresses": [],
+        "public_ip_addresses": [],
+        "other_ip_addresses": [],
+    }
+    for value in addresses:
+        address = ipaddress.ip_address(value)
+        if address.is_global:
+            category = "public_ip_addresses"
+        elif any(
+            address.version == network.version and address in network
+            for network in private_networks
+        ):
+            category = "private_ip_addresses"
+        else:
+            category = "other_ip_addresses"
+        classified[category].append(str(address))
+    return {
+        key: sorted(set(values), key=lambda value: (
+            ipaddress.ip_address(value).version, int(ipaddress.ip_address(value))
+        ))
+        for key, values in classified.items()
+    }
+
+
 def _computer_ip_addresses(computer_id, glpi, token):
     addresses = set()
     try:
@@ -836,6 +868,9 @@ def asset_info(ip, glpi, token):
             "user": base.get("user"),
             "ip": base.get("ip") or ip,
             "ip_addresses": [],
+            "private_ip_addresses": [],
+            "public_ip_addresses": [],
+            "other_ip_addresses": [],
             "serial_number": None,
             "asset_tag": None,
             "operating_system": None,
@@ -867,6 +902,7 @@ def asset_info(ip, glpi, token):
             item["ip_addresses"] = list(dict.fromkeys([
                 *base_ips, *_computer_ip_addresses(computer_id, glpi, token)
             ]))[:32]
+            item.update(_classify_ip_addresses(item["ip_addresses"]))
             item["ip"] = (
                 ip if ip in item["ip_addresses"] or not item["ip_addresses"]
                 else item["ip_addresses"][0]
@@ -1119,6 +1155,9 @@ def asset_info_by_name(host_name, glpi, token):
         "name": name,
         "ip": None,
         "ip_addresses": [],
+        "private_ip_addresses": [],
+        "public_ip_addresses": [],
+        "other_ip_addresses": [],
         "location": None,
         "type": None,
         "status": None,
@@ -1149,6 +1188,7 @@ def asset_info_by_name(host_name, glpi, token):
         details = details_response.json()
         item["name"] = details.get("name") or name
         item["ip_addresses"] = _computer_ip_addresses(computer_id, glpi, token)
+        item.update(_classify_ip_addresses(item["ip_addresses"]))
         item["ip"] = item["ip_addresses"][0] if item["ip_addresses"] else None
         item["serial_number"] = details.get("serial")
         item["asset_tag"] = details.get("otherserial")

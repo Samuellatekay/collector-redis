@@ -132,7 +132,9 @@ tersebut dengan Computer inventaris GLPI, termasuk alamat yang disimpan sebagai 
 dan ditautkan langsung ke Computer maupun melalui relasi Computer → NetworkPort →
 NetworkName → IPAddress, lalu menambahkan Name, User/pemilik, serial number,
 operating system, dan status ke isi tiket. Informasi aset dikelola di GLPI, bukan diambil
-dari inventaris Wazuh. Operating system dibaca dari relasi **Computer → Operating systems**
+dari inventaris Wazuh. Pada event enrichment, collector mengirim daftar IP lengkap beserta
+kategori IP privat (RFC1918/IPv6 ULA), publik (global), dan lainnya agar IRIS menampilkannya
+terpisah. Operating system dibaca dari relasi **Computer → Operating systems**
 di GLPI, termasuk nama OS dan versi jika tersedia. Alert file integrity dengan hash membuat indikator `StixFile` di
 OpenCTI; hash tidak dipakai untuk pencarian aset GLPI. Untuk setiap alert Wazuh,
 aplikasi juga dapat meminta pencarian Computer GLPI berdasarkan hostname agent yang
