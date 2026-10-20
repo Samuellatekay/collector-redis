@@ -470,6 +470,21 @@ def opencti_context(client, obs):
         ctx["labels"] = list(dict.fromkeys([*ctx["labels"], *labels]))
         return True
 
+    def connection_items(value):
+        if isinstance(value, list):
+            return [
+                item for entry in value
+                for item in connection_items(entry)
+            ]
+        if not isinstance(value, dict):
+            return []
+        for key in ("edges", "nodes", "items", "data"):
+            if key in value:
+                return connection_items(value[key])
+        if isinstance(value.get("node"), dict):
+            return [value["node"]]
+        return [value]
+
     def add_indicators_by_value(value):
         if not value:
             return
@@ -557,7 +572,11 @@ def opencti_context(client, obs):
         except Exception as exc:
             log.debug("Relasi located-at gagal dibaca: %s", exc)
 
-    indicator_ids = set()
+    indicator_ids = {
+        str(indicator["id"])
+        for indicator in connection_items(obs.get("indicators"))
+        if indicator.get("id")
+    }
     if observable_id:
         for direction in ("fromId", "toId"):
             try:
