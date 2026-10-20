@@ -95,7 +95,9 @@ def _indicator_relations(client, indicator_id):
     relations = {}
     for direction in ("fromId", "toId"):
         items = client.stix_core_relationship.list(
-            **{direction: indicator_id}, first=100)
+            **{direction: indicator_id},
+            first=100,
+            customAttributes=enrichment.OPENCTI_RELATIONSHIP_ATTRIBUTES)
         for relation in items or []:
             relation_id = relation.get("id")
             key = relation_id or (
@@ -123,7 +125,11 @@ def collect_opencti(client):
         "filterGroups": [],
     }
     items = client.indicator.list(
-        filters=filters, orderBy="created_at", orderMode="asc", first=BATCH
+        filters=filters,
+        orderBy="created_at",
+        orderMode="asc",
+        first=BATCH,
+        customAttributes=enrichment.OPENCTI_INDICATOR_ATTRIBUTES,
     )
     sent = 0
     for i in items:

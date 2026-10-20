@@ -120,6 +120,8 @@ Nilainya dapat diubah dengan `ENRICH_CONNECTOR_WAIT_SECONDS` dan
 
 Skor dan label OpenCTI diambil dari Indicator yang memiliki relasi `based-on` ke observable,
 karena atribut tersebut tersimpan pada Indicator, bukan selalu pada objek IP/domain/hash.
+Query Indicator dan relasi menggunakan daftar field GraphQL eksplisit agar sesuai dengan
+schema OpenCTI yang digunakan dan tidak meminta field SDK baru yang mungkin belum tersedia.
 Enrichment alert juga menyertakan metadata Observable dan Indicator, entitas/relasi STIX
 terkait, serta Events/Sightings yang terhubung jika tersedia. IRIS tetap menampilkan
 catatan `Observable ditemukan di OpenCTI, tetapi belum ada indicator terkait.` apabila

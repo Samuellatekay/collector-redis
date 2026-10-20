@@ -110,7 +110,11 @@ def main() -> int:
             client.stix_cyber_observable.list(first=1)
             report("OK", "OpenCTI", "API dapat diakses dan query Observable berhasil")
         if args.test_label:
-            indicators = client.indicator.list(search=args.test_label, first=100) or []
+            indicators = client.indicator.list(
+                search=args.test_label,
+                first=100,
+                customAttributes=enrichment.OPENCTI_INDICATOR_ATTRIBUTES,
+            ) or []
             indicator_found = any(
                 args.test_label in str(item.get("description") or "")
                 for item in indicators if isinstance(item, dict)

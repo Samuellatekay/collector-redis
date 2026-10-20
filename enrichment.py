@@ -222,6 +222,145 @@ query CollectorConnectorInventory {
 }
 """
 
+OPENCTI_INDICATOR_ATTRIBUTES = """
+    id
+    entity_type
+    name
+    description
+    pattern
+    pattern_type
+    indicator_types
+    confidence
+    valid_from
+    valid_until
+    revoked
+    created
+    modified
+    created_at
+    x_opencti_score
+    objectLabel {
+        id
+        value
+    }
+    createdBy {
+        id
+        name
+    }
+    externalReferences {
+        edges {
+            node {
+                source_name
+                url
+                external_id
+                description
+            }
+        }
+    }
+    observables {
+        edges {
+            node {
+                id
+                entity_type
+                observable_value
+            }
+        }
+    }
+"""
+
+OPENCTI_RELATIONSHIP_ATTRIBUTES = """
+    id
+    entity_type
+    relationship_type
+    description
+    start_time
+    stop_time
+    revoked
+    confidence
+    created
+    modified
+    from {
+        ... on BasicObject {
+            id
+            entity_type
+        }
+        ... on Indicator {
+            name
+            pattern
+        }
+        ... on Event {
+            name
+            description
+        }
+        ... on StixCyberObservable {
+            observable_value
+        }
+    }
+    to {
+        ... on BasicObject {
+            id
+            entity_type
+        }
+        ... on Indicator {
+            name
+            pattern
+        }
+        ... on Event {
+            name
+            description
+        }
+        ... on StixCyberObservable {
+            observable_value
+        }
+    }
+"""
+
+OPENCTI_SIGHTING_ATTRIBUTES = """
+    id
+    entity_type
+    description
+    first_seen
+    last_seen
+    attribute_count
+    x_opencti_negative
+    created
+    modified
+    confidence
+    from {
+        ... on BasicObject {
+            id
+            entity_type
+        }
+        ... on Indicator {
+            name
+            pattern
+        }
+        ... on Event {
+            name
+            description
+        }
+        ... on StixCyberObservable {
+            observable_value
+        }
+    }
+    to {
+        ... on BasicObject {
+            id
+            entity_type
+        }
+        ... on Indicator {
+            name
+            pattern
+        }
+        ... on Event {
+            name
+            description
+        }
+        ... on StixCyberObservable {
+            observable_value
+        }
+    }
+"""
+
 
 def connector_inventory(client):
     try:
@@ -535,7 +674,10 @@ def opencti_context(client, obs):
             {"filters": pattern_search_filters, "first": 100, "getAll": True},
         ):
             try:
-                results = client.indicator.list(**search_args) or []
+                results = client.indicator.list(
+                    **search_args,
+                    customAttributes=OPENCTI_INDICATOR_ATTRIBUTES,
+                ) or []
             except Exception:
                 log.exception(
                     "Pencarian indicator OpenCTI berdasarkan IOC gagal "
@@ -568,7 +710,8 @@ def opencti_context(client, obs):
     else:
         try:
             rels = client.stix_core_relationship.list(
-                fromId=observable_id, relationship_type="located-at", first=10)
+                fromId=observable_id, relationship_type="located-at", first=10,
+                customAttributes=OPENCTI_RELATIONSHIP_ATTRIBUTES)
             for rel in rels or []:
                 to = rel.get("to") or {}
                 ctx["locations"].append({
@@ -590,7 +733,10 @@ def opencti_context(client, obs):
         for direction in ("fromId", "toId"):
             try:
                 relations = client.stix_core_relationship.list(
-                    **{direction: observable_id}, relationship_type="based-on", first=100
+                    **{direction: observable_id},
+                    relationship_type="based-on",
+                    first=100,
+                    customAttributes=OPENCTI_RELATIONSHIP_ATTRIBUTES,
                 )
             except Exception as exc:
                 log.warning(
@@ -606,7 +752,10 @@ def opencti_context(client, obs):
                         indicator_ids.add(str(endpoint["id"]))
     for indicator_id in sorted(indicator_ids):
         try:
-            indicator = client.indicator.read(id=indicator_id)
+            indicator = client.indicator.read(
+                id=indicator_id,
+                customAttributes=OPENCTI_INDICATOR_ATTRIBUTES,
+            )
             if not add_indicator(indicator):
                 log.debug(
                     "Indicator relation OpenCTI tidak menghasilkan objek id=%s",
@@ -636,7 +785,9 @@ def opencti_context(client, obs):
         for direction in ("fromId", "toId"):
             try:
                 related = client.stix_core_relationship.list(
-                    **{direction: source_id}, first=100
+                    **{direction: source_id},
+                    first=100,
+                    customAttributes=OPENCTI_RELATIONSHIP_ATTRIBUTES,
                 ) or []
             except Exception as exc:
                 log.debug(
@@ -693,7 +844,9 @@ def opencti_context(client, obs):
             for direction in ("fromId", "toId"):
                 try:
                     related_sightings = sighting_api.list(
-                        **{direction: source_id}, first=100
+                        **{direction: source_id},
+                        first=100,
+                        customAttributes=OPENCTI_SIGHTING_ATTRIBUTES,
                     ) or []
                 except Exception as exc:
                     log.debug(
