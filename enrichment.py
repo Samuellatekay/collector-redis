@@ -1053,6 +1053,23 @@ def _glpi_ip_values(value):
             continue
 
 
+def _glpi_explicit_ip_values(value):
+    ip_fields = {
+        "ip", "ipaddress", "ipv4", "ipv6", "ipv4address", "ipv6address",
+        "address",
+    }
+    if isinstance(value, dict):
+        for key, item in value.items():
+            normalized_key = re.sub(r"[^a-z0-9]", "", str(key).lower())
+            if normalized_key in ip_fields:
+                yield from _glpi_ip_values(item)
+            elif isinstance(item, (dict, list)):
+                yield from _glpi_explicit_ip_values(item)
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            yield from _glpi_explicit_ip_values(item)
+
+
 def _glpi_records(payload):
     if isinstance(payload, list):
         return [item for item in payload if isinstance(item, dict)]
@@ -1156,7 +1173,10 @@ def _network_name_ip_addresses(network_name_id, glpi, token):
     return {
         address
         for item in ip_addresses
-        for address in _glpi_ip_values(item)
+        for address in (
+            *_glpi_explicit_ip_values(item),
+            *_glpi_ip_values(item.get("name")),
+        )
     }
 
 
@@ -1212,7 +1232,7 @@ def _computer_ip_addresses(computer_id, glpi, token):
         "Computer", computer_id, glpi, token, network_name_search_fields
     ))
     for port in ports[:10]:
-        addresses.update(_glpi_ip_values(port))
+        addresses.update(_glpi_explicit_ip_values(port))
         port_id = port.get("id") or port.get("networkports_id")
         if not port_id:
             continue
@@ -1235,7 +1255,7 @@ def _computer_ip_addresses(computer_id, glpi, token):
             continue
 
         for network_name in network_names[:5]:
-            addresses.update(_glpi_ip_values(network_name))
+            addresses.update(_glpi_explicit_ip_values(network_name))
             network_name_id = network_name.get("id") or network_name.get("networknames_id")
             if network_name_id:
                 network_name_ids.add(str(network_name_id))
