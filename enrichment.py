@@ -137,8 +137,7 @@ def _opencti_entity_summary(entity):
         "id", "entity_type", "name", "value", "observable_value", "type",
         "pattern_type", "confidence", "revoked", "valid_from", "valid_until",
         "created", "modified", "created_at", "updated_at", "first_seen",
-        "last_seen", "start_time", "stop_time", "x_mitre_id",
-        "attribute_count", "negative", "x_opencti_negative",
+        "last_seen", "x_mitre_id",
     ):
         value = entity.get(key)
         if isinstance(value, (str, int, float, bool)) and value != "":
@@ -157,7 +156,6 @@ def _opencti_entity_summary(entity):
         summary["labels"] = labels[:30]
     for key in (
         "aliases", "alias", "x_mitre_aliases", "kill_chain_phases",
-        "event_types",
     ):
         value = entity.get(key)
         if isinstance(value, list):
@@ -351,7 +349,6 @@ def opencti_context(client, obs):
         "indicators": [],
         "related_entities": [],
         "relationships": [],
-        "sightings": [],
         "locations": [],
         "sources": [],
         "external_import_match_count": 0,
@@ -545,10 +542,6 @@ def opencti_context(client, obs):
     source_ids = list(dict.fromkeys(source_ids))
     related_data_truncated = len(source_ids) > 21
     source_ids = source_ids[:21]
-    sightings = {}
-    sighting_api = getattr(client, "stix_sighting_relationship", None)
-    if source_ids and sighting_api is None:
-        log.warning("SDK OpenCTI tidak menyediakan API stix_sighting_relationship")
     for source_id in source_ids:
         for direction in ("fromId", "toId"):
             try:
@@ -570,6 +563,14 @@ def opencti_context(client, obs):
                     name: _opencti_entity_summary(relation.get(name))
                     for name in ("from", "to")
                 }
+                endpoint_types = {
+                    str((endpoints[name] or {}).get("entity_type") or "").casefold()
+                    for name in ("from", "to")
+                }
+                if endpoint_types.intersection({
+                    "event", "x-opencti-event", "stix-sighting-relationship",
+                }):
+                    continue
                 relation_type = relation.get("relationship_type")
                 endpoint_ids = tuple(
                     (endpoints[name] or {}).get("id") for name in ("from", "to")
@@ -598,64 +599,22 @@ def opencti_context(client, obs):
                     if (
                         not entity_id
                         or str(entity_id) == source_id
-                        or entity_type in {"indicator", "stix-core-relationship"}
+                        or entity_type in {
+                            "indicator", "event", "x-opencti-event",
+                            "stix-core-relationship", "stix-sighting-relationship",
+                        }
                         or entity_id == observable_id
                     ):
                         continue
                     related_entities.setdefault(str(entity_id), entity)
 
-        if sighting_api is None:
-            continue
-        for direction in ("fromId", "toId"):
-            try:
-                related = sighting_api.list(
-                    **{direction: source_id}, first=100
-                ) or []
-            except Exception as exc:
-                log.debug(
-                    "Sighting OpenCTI entity=%s direction=%s gagal dibaca: %s",
-                    source_id, direction, exc,
-                )
-                continue
-            if len(related) >= 100:
-                related_data_truncated = True
-            for sighting in related:
-                if not isinstance(sighting, dict):
-                    continue
-                identifier = sighting.get("id")
-                identity = identifier or (
-                    sighting.get("fromId"),
-                    sighting.get("toId"),
-                    sighting.get("first_seen"),
-                    sighting.get("last_seen"),
-                )
-                if identity in sightings:
-                    continue
-                summary = {
-                    "id": identifier,
-                    "from": _opencti_entity_summary(sighting.get("from")),
-                    "to": _opencti_entity_summary(sighting.get("to")),
-                }
-                for key in (
-                    "description", "first_seen", "last_seen", "attribute_count",
-                    "negative", "x_opencti_negative", "created", "modified",
-                ):
-                    value = sighting.get(key)
-                    if isinstance(value, (str, int, float, bool)) and value != "":
-                        summary[key] = value
-                sightings[identity] = summary
-
     if len(relationships) > 100 or len(related_entities) > 50:
         related_data_truncated = True
     ctx["relationships"] = list(relationships.values())[:100]
     ctx["related_entities"] = list(related_entities.values())[:50]
-    if len(sightings) > 50:
-        related_data_truncated = True
-    ctx["sightings"] = list(sightings.values())[:50]
     ctx["indicator_match_count"] = len(seen_indicators)
     ctx["related_entity_count"] = len(related_entities)
     ctx["relationship_count"] = len(relationships)
-    ctx["sighting_count"] = len(sightings)
     ctx["related_data_truncated"] = related_data_truncated
     return ctx
 
