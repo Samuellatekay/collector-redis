@@ -124,6 +124,9 @@ OpenCTI.
 
 Skor dan label OpenCTI diambil dari Indicator yang memiliki relasi `based-on` ke observable,
 karena atribut tersebut tersimpan pada Indicator, bukan selalu pada objek IP/domain/hash.
+Jika relasi `based-on` tidak menghasilkan Indicator, collector juga mencari pattern
+Indicator yang memuat nilai IOC persis. IRIS tetap menampilkan observable yang ditemukan
+meskipun belum ada Indicator terkait dan menjelaskan bila IOC tidak ditemukan.
 Skor Indicator buatan collector sendiri dikecualikan dari reputasi agar severity Wazuh tidak
 disalahartikan sebagai verdict intelijen eksternal.
 
