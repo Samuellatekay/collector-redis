@@ -308,7 +308,13 @@ def opencti_context(client, obs):
 
     def add_indicator(indicator):
         if not isinstance(indicator, dict):
-            return
+            return False
+        identity = indicator.get("id") or (
+            indicator.get("name"), indicator.get("pattern")
+        )
+        if identity in seen_indicators:
+            return False
+        seen_indicators.add(identity)
         score = _opencti_score(indicator)
         labels = _opencti_labels(indicator)
         is_collector_indicator = str(indicator.get("description") or "").startswith(
@@ -377,21 +383,98 @@ def opencti_context(client, obs):
                 if ctx["score"] is None:
                     ctx["score"] = score
         ctx["labels"] = list(dict.fromkeys([*ctx["labels"], *labels]))
+        return True
+
+    seen_indicators = set()
+
+    def connection_items(value):
+        if isinstance(value, list):
+            return [
+                item for entry in value
+                for item in connection_items(entry)
+            ]
+        if not isinstance(value, dict):
+            return []
+        for key in ("edges", "nodes", "items", "data"):
+            if key in value:
+                return connection_items(value[key])
+        if isinstance(value.get("node"), dict):
+            return [value["node"]]
+        return [value]
+
+    def indicator_matches_observable(indicator, value):
+        observable_ids = set()
+        observable_values = set()
+        for observable in connection_items(indicator.get("observables")):
+            if observable.get("id"):
+                observable_ids.add(str(observable["id"]))
+            related_value = observable.get("observable_value") or observable.get("value")
+            if related_value:
+                observable_values.add(str(related_value).casefold())
+        if observable_id and str(observable_id) in observable_ids:
+            return True
+        if value and str(value).casefold() in observable_values:
+            return True
+        pattern = str(indicator.get("pattern") or "")
+        return bool(value and re.search(
+            rf"""['"]{re.escape(str(value))}['"]""",
+            pattern,
+            re.IGNORECASE,
+        ))
+
+    def add_indicators_by_value(value):
+        if not value:
+            return
+        candidates = {}
+        pattern_filters = {
+            "mode": "and",
+            "filters": [{
+                "key": "pattern",
+                "values": [str(value)],
+                "operator": "contains",
+            }],
+            "filterGroups": [],
+        }
+        for search_args in (
+            {"search": str(value), "first": 100},
+            {"filters": pattern_filters, "first": 100},
+        ):
+            try:
+                results = client.indicator.list(**search_args) or []
+            except Exception:
+                log.exception(
+                    "Pencarian Indicator OpenCTI gagal value=%s query=%s",
+                    value,
+                    "search" if "search" in search_args else "pattern_contains",
+                )
+                continue
+            for indicator in results:
+                if not isinstance(indicator, dict):
+                    continue
+                identity = indicator.get("id") or (
+                    indicator.get("name"), indicator.get("pattern")
+                )
+                candidates.setdefault(identity, indicator)
+
+        matched = []
+        for indicator in candidates.values():
+            if indicator_matches_observable(indicator, value):
+                add_indicator(indicator)
+                matched.append(indicator.get("id"))
+        log.info(
+            "OpenCTI indicator lookup value=%s observable_id=%s candidates=%d exact_matches=%d ids=%s",
+            value, observable_id, len(candidates), len(matched), matched[:20],
+        )
 
     observable_id = obs.get("id")
+    observable_value = obs.get("observable_value")
+    if not observable_value:
+        observable_value = (file_hash(obs) or {}).get("value")
+    for indicator in connection_items(obs.get("indicators")):
+        add_indicator(indicator)
+
     if not observable_id:
-        value = obs.get("observable_value")
-        if value:
-            try:
-                candidates = client.indicator.list(search=value, first=100) or []
-            except Exception:
-                log.exception("Pencarian indicator OpenCTI berdasarkan IOC gagal value=%s", value)
-                candidates = []
-            exact_values = (f"'{value}'", f'"{value}"')
-            for indicator in candidates:
-                pattern = str(indicator.get("pattern") or "") if isinstance(indicator, dict) else ""
-                if any(exact.casefold() in pattern.casefold() for exact in exact_values):
-                    add_indicator(indicator)
+        add_indicators_by_value(observable_value)
         return ctx
 
     try:
@@ -428,6 +511,8 @@ def opencti_context(client, obs):
             add_indicator(client.indicator.read(id=indicator_id))
         except Exception as exc:
             log.debug("Indicator OpenCTI %s gagal dibaca: %s", indicator_id, exc)
+    if not ctx["indicators"]:
+        add_indicators_by_value(observable_value)
     return ctx
 
 
