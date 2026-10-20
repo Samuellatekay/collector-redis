@@ -120,6 +120,10 @@ Nilainya dapat diubah dengan `ENRICH_CONNECTOR_WAIT_SECONDS` dan
 
 Skor dan label OpenCTI diambil dari Indicator yang memiliki relasi `based-on` ke observable,
 karena atribut tersebut tersimpan pada Indicator, bukan selalu pada objek IP/domain/hash.
+Enrichment alert juga menyertakan metadata Observable dan Indicator, entitas/relasi STIX
+terkait, serta Events/Sightings yang terhubung jika tersedia. IRIS tetap menampilkan
+catatan `Observable ditemukan di OpenCTI, tetapi belum ada indicator terkait.` apabila
+Observable cocok tetapi lookup tidak menemukan Indicator.
 Skor Indicator buatan collector sendiri dikecualikan dari reputasi agar severity Wazuh tidak
 disalahartikan sebagai verdict intelijen eksternal.
 
