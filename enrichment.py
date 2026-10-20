@@ -483,9 +483,18 @@ def opencti_context(client, obs):
             }],
             "filterGroups": [],
         }
+        pattern_search_filters = {
+            **pattern_filters,
+            "filters": [{
+                "key": "pattern",
+                "values": [str(value)],
+                "operator": "search",
+            }],
+        }
         for search_args in (
             {"search": str(value), "first": 100},
             {"filters": pattern_filters, "first": 100},
+            {"filters": pattern_search_filters, "first": 100},
         ):
             try:
                 results = client.indicator.list(**search_args) or []
@@ -494,7 +503,9 @@ def opencti_context(client, obs):
                     "Pencarian indicator OpenCTI berdasarkan IOC gagal "
                     "value=%s query=%s",
                     value,
-                    "pattern" if "filters" in search_args else "search",
+                    search_args.get("filters", {}).get("filters", [{}])[0].get(
+                        "operator", "search"
+                    ),
                 )
                 continue
             for indicator in results:
@@ -505,13 +516,19 @@ def opencti_context(client, obs):
                     candidates.setdefault(identity, indicator)
 
         exact_pattern = re.compile(
-            rf"""=\s*(?:'{re.escape(str(value))}'|"{re.escape(str(value))}")(?=\s|\]|\)|$)""",
+            rf"""['"]{re.escape(str(value))}['"]""",
             re.IGNORECASE,
         )
+        matched_count = 0
         for indicator in candidates.values():
             pattern = str(indicator.get("pattern") or "")
             if exact_pattern.search(pattern):
                 add_indicator(indicator)
+                matched_count += 1
+        log.info(
+            "OpenCTI indicator lookup value=%s candidates=%d exact_matches=%d",
+            value, len(candidates), matched_count,
+        )
 
     observable_id = obs.get("id")
     observable_value = obs.get("observable_value")
