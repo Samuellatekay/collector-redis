@@ -30,7 +30,7 @@ MAX_PER_CYCLE = int(os.getenv("ENRICH_MAX_PER_CYCLE", "20"))
 CACHE_TTL = int(os.getenv("ENRICH_CACHE_TTL", "86400"))     # detik
 ENRICH_DELAY = int(os.getenv("ENRICH_DELAY_SECONDS", "120"))  # beri waktu connector OpenCTI
 CONNECTOR_WAIT_SECONDS = max(0, int(os.getenv("ENRICH_CONNECTOR_WAIT_SECONDS", "45")))
-CONNECTOR_CACHE_TTL = max(60, int(os.getenv("ENRICH_CONNECTOR_CACHE_TTL", "86400")))
+CONNECTOR_CACHE_TTL = max(1, int(os.getenv("ENRICH_CONNECTOR_CACHE_TTL", "1")))
 ASSET_ENABLED = os.getenv("ENRICH_ASSET", "true").lower() == "true"
 
 OBS_TYPES = ["IPv4-Addr", "IPv6-Addr", "Domain-Name", "StixFile"]
