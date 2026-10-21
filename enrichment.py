@@ -1114,7 +1114,6 @@ def _network_name_ids(item_type, item_id, glpi, token, search_fields):
             "range": "0-49",
             "criteria[0][field]": item_id_field,
             "criteria[0][searchtype]": "equals",
-            "criteria[0][searchtype]": "contains",
             "criteria[0][value]": str(item_id),
             "criteria[1][field]": item_type_field,
             "criteria[1][searchtype]": "equals",
