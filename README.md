@@ -143,8 +143,9 @@ dan lainnya agar IRIS menampilkannya terpisah. Operating system dibaca dari rela
 di GLPI, termasuk nama OS dan versi jika tersedia. Alert file integrity dengan hash membuat indikator `StixFile` di
 OpenCTI; hash tidak dipakai untuk pencarian aset GLPI. Untuk setiap alert Wazuh,
 aplikasi juga dapat meminta pencarian Computer GLPI berdasarkan hostname agent yang
-cocok persis dan unik, sehingga aset sensor dapat ditampilkan terpisah dari IP
-sumber/penyerang.
+cocok persis dan unik. API GLPI mencari nama menggunakan `contains`, lalu collector
+memastikan nama hasil sama persis (abaikan kapitalisasi), sehingga aset sensor dapat
+ditampilkan terpisah dari IP sumber/penyerang.
 
 Event indikator OpenCTI di `opencti-events` menyertakan `score` dan `relations`.
 Relasi memuat relasi masuk maupun keluar, dengan tipe relasi dan ringkasan entitas

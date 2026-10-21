@@ -1588,7 +1588,7 @@ def asset_info_by_name(host_name, glpi, token):
         params = {
             "range": "0-49",
             "criteria[0][field]": name_fields[0],
-            "criteria[0][searchtype]": "equals",
+            "criteria[0][searchtype]": "contains",
             "criteria[0][value]": host_name,
             "forcedisplay[0]": "2",
             "forcedisplay[1]": name_fields[0],
