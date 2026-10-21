@@ -1,5 +1,6 @@
 # Collector OpenCTI + GLPI <-> Redis <-> Logstash
 
+
 ## 1. Redis (VM-1, /etc/redis/redis.conf)
     bind 0.0.0.0
     protected-mode yes
