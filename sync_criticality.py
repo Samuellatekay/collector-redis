@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Sinkronkan criticality aset dari GLPI ke Redis (HSET asset:<nama> criticality N).
 
-Aplikasi analisis membaca key itu saat menghitung skor risiko.
+Aplikasi analisis membaca key itu saat menghitung skor risiko. Key ditulis dua jenis:
+  asset:<nama komputer>   (cocok dengan agent.name Wazuh)
+  asset:<alamat IP>       (cocok dengan IP tujuan/sumber alert; semua IP komputer di GLPI)
 
 Cara pakai (dari folder collector):
     docker compose exec collector python sync_criticality.py --dry-run
@@ -14,6 +16,7 @@ Sumber nilai di GLPI (urutan):
   2. Baris di kolom Comment komputer:  criticality=5   (atau  criticality: 5)
 """
 import argparse
+import ipaddress
 import os
 import re
 import sys
@@ -22,6 +25,7 @@ import time
 import requests
 
 import collector
+import enrichment
 
 CRIT_FIELD = os.getenv("GLPI_CRIT_FIELD", "").strip()
 COMMENT_RE = re.compile(r"criticality\s*[:=]\s*([1-5])\b", re.I)
@@ -64,6 +68,24 @@ def computers(token):
         start += PAGE
 
 
+def computer_ips(item_id, token):
+    """Semua IP komputer di GLPI (NetworkPort/NetworkName/IPAddress), hanya yang valid."""
+    try:
+        values = enrichment._computer_ip_addresses(item_id, collector.GLPI, token)
+    except Exception as exc:
+        print(f"  [CEK] IP komputer #{item_id} tidak terbaca: {type(exc).__name__}", file=sys.stderr)
+        return []
+    out = []
+    for value in values or []:
+        try:
+            ip = ipaddress.ip_address(str(value).strip())
+        except ValueError:
+            continue
+        if not (ip.is_loopback or ip.is_unspecified or ip.is_link_local):
+            out.append(str(ip))
+    return list(dict.fromkeys(out))
+
+
 def sync(dry_run: bool) -> int:
     token = collector.glpi_session()
     total = written = 0
@@ -75,10 +97,11 @@ def sync(dry_run: bool) -> int:
             if not name or level is None:
                 continue
             written += 1
-            print(f"{'[dry-run] ' if dry_run else ''}asset:{name} criticality={level}")
+            keys = list(dict.fromkeys([name, name.lower(), *computer_ips(item.get("id"), token)]))
+            print(f"{'[dry-run] ' if dry_run else ''}{name} criticality={level} -> "
+                  + ", ".join(f"asset:{k}" for k in keys))
             if not dry_run:
-                # Nama harus sama persis dengan agent.name Wazuh; simpan juga versi huruf kecil.
-                for key in {name, name.lower()}:
+                for key in keys:
                     collector.r.hset(f"asset:{key}", "criticality", level)
     finally:
         collector.glpi_kill(token)
