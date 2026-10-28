@@ -1,4 +1,5 @@
 """
+
 Modul enrichment untuk collector.
 
 Untuk setiap observable BARU di OpenCTI (IPv4-Addr, IPv6-Addr, Domain-Name) dikumpulkan:
